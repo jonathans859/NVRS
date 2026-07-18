@@ -1,0 +1,65 @@
+name: iOS TestFlight
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios-testflight.yml"
+  workflow_dispatch:
+
+# Serialize uploads; a superseded run is safe to cancel (its build number
+# is never reused - see BUILD_NUMBER below).
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: true
+
+jobs:
+  testflight:
+    # ASC enforces an SDK floor on uploads (2026: iOS 26 SDK -> macos-26).
+    runs-on: macos-26
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # commit-count build numbers
+
+      - name: Select newest Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          # No bundler-cache: repo has no Gemfile.lock (authored on Windows).
+
+      - name: Install fastlane
+        run: bundle install
+
+      - name: Compute build number
+        run: echo "BUILD_NUMBER=$(git rev-list --count HEAD).1.${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+
+      - name: Build and upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DEV_CERT_P12_BASE64: ${{ secrets.DEV_CERT_P12_BASE64 }}
+          DEV_CERT_P12_PASSWORD: ${{ secrets.DEV_CERT_P12_PASSWORD }}
+          CHANGELOG: ${{ github.event.head_commit.message }}
+        run: bundle exec fastlane beta
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: NVRS-ipa
+          path: ios/build/NVRS.ipa

@@ -1,0 +1,25 @@
+# Claude Code local notes
+.claude-notes/
+
+# Python
+__pycache__/
+*.pyc
+
+# Packaged add-on builds
+dist/
+
+# Xcode / Swift
+ios/build/
+ios/DerivedData/
+*.xcuserstate
+xcuserdata/
+*.ipa
+*.dSYM.zip
+
+# fastlane
+ios/fastlane/report.xml
+ios/fastlane/README.md
+ios/fastlane/test_output/
+
+# macOS
+.DS_Store

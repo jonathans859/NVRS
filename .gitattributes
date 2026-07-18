@@ -1,0 +1,9 @@
+# Unix runners execute these; CRLF breaks heredocs and $() substitutions.
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.rb text eol=lf
+*.swift text eol=lf
+Gemfile text eol=lf
+Fastfile text eol=lf

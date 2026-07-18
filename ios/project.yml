@@ -1,0 +1,34 @@
+name: NVRS
+options:
+  bundleIdPrefix: com.jonathan859
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  NVRS:
+    type: application
+    platform: iOS
+    sources:
+      - NVRS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jonathan859.nvrs
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1"
+    info:
+      path: NVRS/Info.plist
+      properties:
+        CFBundleDisplayName: NVRS
+        UIBackgroundModes: [audio]
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSLocalNetworkUsageDescription: >-
+          NVRS connects to your PC over your Tailscale network to receive
+          NVDA speech.
