@@ -35,7 +35,7 @@ end
 # Archive + export a scheme with Apple cloud signing. The archive step
 # needs the auth flags in xcargs; gym adds them to the export step itself
 # once app_store_connect_api_key has run.
-def nvrs_build(scheme:)
+def nvrs_build(scheme:, sdk: nil)
   update_code_signing_settings(
     use_automatic_signing: true,
     team_id: ENV["APPLE_TEAM_ID"],
@@ -45,7 +45,7 @@ def nvrs_build(scheme:)
   key_path = File.absolute_path(File.join(Dir.tmpdir, "nvrs-asc-authkey.p8"))
   File.write(key_path, ENV["ASC_KEY_P8"])
 
-  build_app(
+  options = {
     project: "NVRS.xcodeproj",
     scheme: scheme,
     output_directory: "build",
@@ -64,7 +64,11 @@ def nvrs_build(scheme:)
       "DEVELOPMENT_TEAM=#{ENV['APPLE_TEAM_ID']}",
       "CURRENT_PROJECT_VERSION=#{ENV['BUILD_NUMBER'] || '1'}",
     ].join(" "),
-  )
+  }
+  # In a multiplatform project gym only packages a Mac pkg when the sdk
+  # says macosx; without it the mac export gets wrapped as an iOS ipa.
+  options[:sdk] = sdk if sdk
+  build_app(**options)
 end
 
 def nvrs_changelog
@@ -91,7 +95,7 @@ platform :mac do
     setup_ci
     nvrs_asc_key
     nvrs_import_cached_dev_cert
-    nvrs_build(scheme: "NVRSMac")
+    nvrs_build(scheme: "NVRSMac", sdk: "macosx")
     # Mac App Store export produces a signed installer pkg.
     upload_to_testflight(
       app_platform: "osx",
