@@ -10,6 +10,11 @@ final class MirrorViewModel: ObservableObject {
     @Published var isConnectEnabled = false
     @Published var isLocalSpeechMuted = false
 
+    // Diagnostics
+    @Published private(set) var envelopesReceived = 0
+    @Published private(set) var utterancesStarted = 0
+    @Published private(set) var audioError: String?
+
     let settings: SettingsStore
     private let renderer = SpeechRenderer()
     private let audioSession = AudioSessionController()
@@ -29,6 +34,20 @@ final class MirrorViewModel: ObservableObject {
         }
         audioSession.isRendererIdle = { [weak self] in
             self?.renderer.isIdle ?? true
+        }
+        renderer.onUtteranceStarted = { [weak self] in
+            self?.utterancesStarted += 1
+        }
+        // A connection that died while suspended shows up as failed only
+        // after backoff; on return to foreground, reconnect right away.
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.reconnectAfterForeground()
+            }
         }
         applyBaselines()
         filterEngine.filters = settings.filters
@@ -91,6 +110,25 @@ final class MirrorViewModel: ObservableObject {
         transport = nil
     }
 
+    private func reconnectAfterForeground() {
+        guard isConnectEnabled, connectionState != .connected else { return }
+        connect()
+    }
+
+    /// Speaks a canned phrase through the exact same renderer/audio path as
+    /// mirrored speech — separates audio problems from transport problems.
+    func speakTest() {
+        audioSession.speechActivity()
+        audioError = audioSession.lastError
+        let envelope = SpeechEnvelope(
+            seq: 0,
+            priority: .now,
+            ts: 0,
+            items: [.text("NVRS test. Speech on this iPhone is working.")]
+        )
+        renderer.enqueue(envelope)
+    }
+
     /// Magic-tap target: mute/unmute local playback without dropping the link.
     func toggleLocalMute() {
         isLocalSpeechMuted.toggle()
@@ -131,6 +169,7 @@ final class MirrorViewModel: ObservableObject {
     private func handle(_ message: ServerMessage) {
         switch message {
         case .speech(let envelope):
+            envelopesReceived += 1
             let text = envelope.plainText
             if !text.isEmpty {
                 lastSpoken = text
@@ -138,6 +177,7 @@ final class MirrorViewModel: ObservableObject {
             filterEngine.process(text)
             if !isLocalSpeechMuted {
                 audioSession.speechActivity()
+                audioError = audioSession.lastError
                 renderer.enqueue(envelope)
             }
         case .cancel:

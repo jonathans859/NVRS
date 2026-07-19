@@ -171,6 +171,10 @@ class TcpServerTransport(SpeechTransport):
 				continue
 			try:
 				serverSock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+				# Other components in the NVDA process may set a global
+				# socket.setdefaulttimeout; force blocking mode so accept()
+				# doesn't spuriously time out.
+				serverSock.settimeout(None)
 				serverSock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 				serverSock.bind((bindAddr, self._port))
 				serverSock.listen(2)
@@ -190,7 +194,12 @@ class TcpServerTransport(SpeechTransport):
 			log.info("NVRS: listening on %s:%d" % (bindAddr, self._port))
 			try:
 				while not self._stopping.is_set():
-					clientSock, addr = serverSock.accept()
+					try:
+						clientSock, addr = serverSock.accept()
+					except socket.timeout:
+						# Defensive: keep accepting on the same socket.
+						continue
+					clientSock.settimeout(None)
 					threading.Thread(
 						target=self._handshakeAndServe,
 						args=(clientSock, addr),
@@ -200,6 +209,10 @@ class TcpServerTransport(SpeechTransport):
 			except OSError:
 				# Server socket closed (stop()) or bind address vanished
 				# (Tailscale went down); loop re-binds unless stopping.
+				try:
+					serverSock.close()
+				except OSError:
+					pass
 				continue
 
 	def _handshakeAndServe(self, sock, addr):

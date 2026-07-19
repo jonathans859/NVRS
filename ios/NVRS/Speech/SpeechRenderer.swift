@@ -38,6 +38,10 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// audio session activation/idle handling.
     var onActivity: ((Bool) -> Void)?
 
+    /// Called (on main) each time the synthesizer actually starts an
+    /// utterance; drives the diagnostics counter.
+    var onUtteranceStarted: (() -> Void)?
+
     override init() {
         super.init()
         synthesizer.delegate = self
@@ -104,6 +108,12 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     // MARK: - AVSpeechSynthesizerDelegate
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async {
+            self.onUtteranceStarted?()
+        }
+    }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         DispatchQueue.main.async {
