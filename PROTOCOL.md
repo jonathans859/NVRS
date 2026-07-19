@@ -78,6 +78,14 @@ travel as envelope items instead (`isSpeechBeepCommand` beeps are not
 forwarded here, avoiding doubles).
 
 ```json
+{"type": "wave", "name": "focusMode"}
+```
+The PC played a wave-file earcon (captured via `nvwave.decide_playWaveFile`;
+`name` is the basename without extension). The app plays its bundled copy of
+known sounds (NVDA's core earcons) and ignores unknown names — the actual
+files live on the PC.
+
+```json
 {"type": "synthConfig", "synth": "oneCore", "voice": "…", "voiceName": "…",
  "lang": "en_US", "rate": 50, "pitch": 50, "volume": 100}
 ```

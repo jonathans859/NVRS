@@ -116,7 +116,14 @@ enum ServerMessage {
     /// A standalone beep (progress bars, add-on sounds) outside any
     /// speech sequence; played immediately, not queued behind speech.
     case beep(hz: Double, ms: Double, left: Double, right: Double)
+    /// A named earcon (browseMode, focusMode, error, …); the app plays
+    /// its bundled copy if it has one.
+    case wave(name: String)
     case unknown
+}
+
+private struct WaveMessage: Decodable {
+    let name: String?
 }
 
 private struct BeepMessage: Decodable {
@@ -148,6 +155,11 @@ enum WireParser {
             return (try? decoder.decode(BeepMessage.self, from: data)).map {
                 .beep(hz: $0.hz ?? 440, ms: $0.ms ?? 40, left: $0.left ?? 50, right: $0.right ?? 50)
             }
+        case "wave":
+            guard let name = (try? decoder.decode(WaveMessage.self, from: data))?.name else {
+                return .unknown
+            }
+            return .wave(name: name)
         default:
             return .unknown
         }

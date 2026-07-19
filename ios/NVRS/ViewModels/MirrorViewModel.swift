@@ -22,6 +22,7 @@ final class MirrorViewModel: ObservableObject {
 
     let settings: SettingsStore
     private let renderer = SpeechRenderer()
+    private let soundPlayer = SoundPlayer()
     private let audioSession = AudioSessionController()
     private let filterEngine = NotificationFilterEngine()
     private var transport: SpeechTransport?
@@ -269,6 +270,11 @@ final class MirrorViewModel: ObservableObject {
             if !isLocalSpeechMuted {
                 audioSession.speechActivity()
                 renderer.playImmediateBeep(hz: hz, ms: ms, pan: Float((right - left) / 100.0))
+            }
+        case .wave(let name):
+            if !isLocalSpeechMuted {
+                audioSession.speechActivity()
+                soundPlayer.play(name)
             }
         case .synthConfig(let config):
             pcConfig = config

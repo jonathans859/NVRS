@@ -42,6 +42,13 @@ instead of ducking it, and uses a long IO buffer to keep battery cost low).
 With it off, the session lapses ~2 min after the last speech and the app
 reconnects on next foreground.
 
+## Sound credits
+
+`ios/NVRS/Sounds/` contains sound effect files from
+[NVDA](https://github.com/nvaccess/nvda) (NV Access Limited, GPL v2), so the
+phone can play the same earcons (browse/focus mode, errors, suggestions,
+screen curtain) the PC plays.
+
 ## CI / TestFlight
 
 `.github/workflows/ios-testflight.yml` builds on every push touching

@@ -16,6 +16,9 @@ from scriptHandler import script
 import speech
 import speech.extensions
 import speech.manager
+import os
+
+import nvwave
 import synthDriverHandler
 import tones
 import ui
@@ -81,6 +84,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		self._origManagerSpeak = None
 		self._registerSpeechHooks()
 		tones.decide_beep.register(self._onDecideBeep)
+		nvwave.decide_playWaveFile.register(self._onDecidePlayWaveFile)
 		synthDriverHandler.synthChanged.register(self._onSynthChanged)
 		self._pollStop = threading.Event()
 		self._pollThread = threading.Thread(
@@ -104,6 +108,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			speech.manager.SpeechManager.speak = self._origManagerSpeak
 		speech.extensions.speechCanceled.unregister(self._onSpeechCanceled)
 		tones.decide_beep.unregister(self._onDecideBeep)
+		nvwave.decide_playWaveFile.unregister(self._onDecidePlayWaveFile)
 		synthDriverHandler.synthChanged.unregister(self._onSynthChanged)
 		self._stopTransport()
 		super().terminate()
@@ -160,6 +165,19 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				{"type": "beep", "hz": hz, "ms": length, "left": left, "right": right}
 			)
 		# Always keep playing the beep locally on the PC.
+		return True
+
+	def _onDecidePlayWaveFile(self, fileName=None, **kwargs):
+		# Sound files themselves live on the PC; forward the basename and
+		# let the app play its own bundled copy of known sounds (NVDA's
+		# core earcons: browseMode, focusMode, error, ...). Speech-sequence
+		# WaveFileCommands are not serialized as envelope items, so
+		# forwarding every wave here never doubles.
+		transport = self._transport
+		if transport is not None and not self._muted and fileName:
+			name = os.path.splitext(os.path.basename(fileName))[0]
+			transport.send({"type": "wave", "name": name})
+		# Always keep playing the sound locally on the PC.
 		return True
 
 	def _onSynthChanged(self, **kwargs):
