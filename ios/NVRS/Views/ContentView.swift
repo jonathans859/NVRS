@@ -34,7 +34,7 @@ struct ContentView: View {
                         viewModel.speakTest()
                     }
                     .accessibilityHint("Speaks locally through the same audio path as mirrored speech, without the PC.")
-                    Text("Received \(viewModel.envelopesReceived), spoken \(viewModel.utterancesStarted).")
+                    Text("Bytes \(viewModel.bytesReceived), lines \(viewModel.linesParsed), bad \(viewModel.decodeFailures), received \(viewModel.envelopesReceived), spoken \(viewModel.utterancesStarted).")
                         .accessibilityAddTraits(.updatesFrequently)
                     if let audioError = viewModel.audioError {
                         Text("Audio session error: \(audioError)")

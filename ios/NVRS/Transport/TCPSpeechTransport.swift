@@ -14,6 +14,9 @@ final class TCPSpeechTransport: SpeechTransport {
     private var buffer = Data()
     private var stopped = true
     private var attempt = 0
+    private var bytesReceived = 0
+    private var linesParsed = 0
+    private var decodeFailures = 0
 
     init(host: String, port: UInt16, secret: String) {
         self.host = host
@@ -116,8 +119,14 @@ final class TCPSpeechTransport: SpeechTransport {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             guard let self, conn === self.connection else { return }
             if let data, !data.isEmpty {
+                self.bytesReceived += data.count
                 self.buffer.append(data)
                 self.drainLines()
+                self.emit(.stats(
+                    bytesReceived: self.bytesReceived,
+                    linesParsed: self.linesParsed,
+                    decodeFailures: self.decodeFailures
+                ))
             }
             if isComplete || error != nil {
                 // Server closed (bad auth, NVDA exiting) or the link died.
@@ -134,8 +143,11 @@ final class TCPSpeechTransport: SpeechTransport {
             let lineData = buffer.subdata(in: buffer.startIndex..<newlineIndex)
             buffer.removeSubrange(buffer.startIndex...newlineIndex)
             guard !lineData.isEmpty else { continue }
+            linesParsed += 1
             if let message = WireParser.parse(lineData) {
                 emit(.message(message))
+            } else {
+                decodeFailures += 1
             }
         }
     }

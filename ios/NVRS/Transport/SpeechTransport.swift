@@ -11,6 +11,8 @@ enum TransportState: Equatable {
 enum TransportEvent {
     case stateChanged(TransportState)
     case message(ServerMessage)
+    /// Low-level receive counters for diagnosing where a silent stream dies.
+    case stats(bytesReceived: Int, linesParsed: Int, decodeFailures: Int)
 }
 
 /// Abstraction over how NVRS messages reach the app, so a relay transport

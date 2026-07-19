@@ -14,6 +14,9 @@ final class MirrorViewModel: ObservableObject {
     @Published private(set) var envelopesReceived = 0
     @Published private(set) var utterancesStarted = 0
     @Published private(set) var audioError: String?
+    @Published private(set) var bytesReceived = 0
+    @Published private(set) var linesParsed = 0
+    @Published private(set) var decodeFailures = 0
 
     let settings: SettingsStore
     private let renderer = SpeechRenderer()
@@ -87,9 +90,14 @@ final class MirrorViewModel: ObservableObject {
             port: UInt16(settings.port),
             secret: settings.secret
         )
-        tcp.onEvent = { [weak self] event in
+        tcp.onEvent = { [weak self, weak tcp] event in
             DispatchQueue.main.async {
-                self?.handle(event)
+                guard let self, let tcp, tcp === self.transport as? TCPSpeechTransport else {
+                    // A replaced transport's trailing events must not
+                    // clobber the live connection's state.
+                    return
+                }
+                self.handle(event)
             }
         }
         transport = tcp
@@ -163,6 +171,10 @@ final class MirrorViewModel: ObservableObject {
             }
         case .message(let message):
             handle(message)
+        case .stats(let bytes, let lines, let failures):
+            bytesReceived = bytes
+            linesParsed = lines
+            decodeFailures = failures
         }
     }
 

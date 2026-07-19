@@ -271,6 +271,7 @@ class TcpServerTransport(SpeechTransport):
 		return hmac.compare_digest(supplied.encode("utf-8"), self._secret.encode("utf-8"))
 
 	def _senderLoop(self, client):
+		sent = 0
 		while not (self._stopping.is_set() or client.closed.is_set()):
 			try:
 				data = client.queue.get(timeout=1)
@@ -279,7 +280,18 @@ class TcpServerTransport(SpeechTransport):
 			try:
 				client.sock.sendall(data)
 			except OSError:
+				log.info(
+					"NVRS: send to %s failed after %d messages" % (client.addr[0], sent),
+					exc_info=True,
+				)
 				return
+			sent += 1
+			if sent == 1:
+				log.info(
+					"NVRS: first payload (%d bytes) delivered to %s" % (len(data), client.addr[0])
+				)
+			elif sent % 100 == 0:
+				log.debug("NVRS: %d messages delivered to %s" % (sent, client.addr[0]))
 
 	def _readerLoop(self, client):
 		# We ignore whatever the client sends after auth, but reading is how
