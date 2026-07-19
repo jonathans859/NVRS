@@ -55,6 +55,12 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(baseVolume, forKey: "baseVolume") }
     }
 
+    /// Experimental: inject Eloquence `p1 inline commands to shorten
+    /// pauses, mirroring the NVDA IBMTTS driver's "Shorten all pauses".
+    @Published var shortenPauses: Bool {
+        didSet { defaults.set(shortenPauses, forKey: "shortenPauses") }
+    }
+
     @Published var filters: [NotificationFilter] {
         didSet {
             if let data = try? JSONEncoder().encode(filters) {
@@ -75,6 +81,7 @@ final class SettingsStore: ObservableObject {
             ?? Double(AVSpeechUtteranceDefaultSpeechRate)
         basePitch = defaults.object(forKey: "basePitch") as? Double ?? 1.0
         baseVolume = defaults.object(forKey: "baseVolume") as? Double ?? 1.0
+        shortenPauses = defaults.object(forKey: "shortenPauses") as? Bool ?? false
         if let data = defaults.data(forKey: "filters"),
            let stored = try? JSONDecoder().decode([NotificationFilter].self, from: data) {
             filters = stored

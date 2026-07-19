@@ -84,6 +84,7 @@ final class MirrorViewModel: ObservableObject {
         renderer.baseRate = Float(settings.baseRate)
         renderer.basePitch = Float(settings.basePitch)
         renderer.baseVolume = Float(settings.baseVolume)
+        renderer.shortenPauses = settings.shortenPauses
     }
 
     // MARK: - Connection control

@@ -35,10 +35,12 @@ struct SettingsView: View {
                 rateSlider
                 pitchSlider
                 volumeSlider
+                Toggle("Shorten pauses (Eloquence)", isOn: $settings.shortenPauses)
+                    .accessibilityHint("Experimental. Injects Eloquence inline commands to shorten punctuation and chunk pauses, like the PC driver's shorten all pauses. Only works with an Eloquence voice; if you hear spoken command syntax, turn it off.")
             } header: {
                 Text("Speech")
             } footer: {
-                Text("NVDA's pitch, rate and volume changes are applied relative to these baselines.")
+                Text("NVDA's pitch, rate and volume changes are applied relative to these baselines. Pause shortening requires an Eloquence voice and is experimental — test with the speak test button.")
             }
 
             Section {

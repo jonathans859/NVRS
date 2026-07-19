@@ -34,6 +34,18 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     var basePitch: Float = 1.0
     var baseVolume: Float = 1.0
 
+    /// Experimental: replicate the IBMTTS driver's "Shorten all pauses" by
+    /// injecting Eloquence inline `p1 commands into the text (only when an
+    /// Eloquence voice speaks it), and scaling explicit breaks down.
+    var shortenPauses = false
+
+    /// Same pattern the NVDA IBMTTS driver uses (pause_re): a 1 ms pause
+    /// command in front of punctuation keeps intonation, kills the pause.
+    private static let pauseRegex = try? NSRegularExpression(
+        pattern: "([a-zA-Z0-9]|\\s)([-,.:;)(?!\u{2013}\u{2014}])(\\2*?)(\\s|[\\\\/]|$)"
+    )
+    private static let pausePunctuation = CharacterSet(charactersIn: "-,.:;)(?!\u{2013}\u{2014}")
+
     /// Called whenever the renderer starts or stops having work; drives
     /// audio session activation/idle handling.
     var onActivity: ((Bool) -> Void)?
@@ -158,8 +170,9 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
             textRun.removeAll()
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
-            let utterance = AVSpeechUtterance(string: text)
-            utterance.voice = voice(for: state.lang)
+            let segmentVoice = voice(for: state.lang)
+            let utterance = AVSpeechUtterance(string: pauseShortenedText(text, voice: segmentVoice))
+            utterance.voice = segmentVoice
             utterance.rate = mappedRate(state.rate)
             utterance.pitchMultiplier = mappedPitch(state.pitch)
             utterance.volume = mappedVolume(state.volume)
@@ -205,7 +218,9 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
                 state.characterMode = on
             case .pause(let ms):
                 flushTextRun()
-                pendingDelayMs += ms
+                // The PC driver scales explicit breaks down with speech
+                // rate; approximate that when pause shortening is on.
+                pendingDelayMs += shortenPauses ? min(ms / 5, 100) : ms
             case .endUtterance:
                 flushTextRun()
             case .beep(let hz, let ms, let left, let right):
@@ -218,6 +233,35 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         }
         flushTextRun()
         return steps
+    }
+
+    // MARK: - Pause shortening (Eloquence inline commands)
+
+    private func pauseShortenedText(_ text: String, voice: AVSpeechSynthesisVoice?) -> String {
+        guard shortenPauses else { return text }
+        // Only Eloquence parses backquote commands; other voices would
+        // read them out. With no explicit voice we trust the opt-in.
+        if let voice, !voice.identifier.lowercased().contains("eloquence") {
+            return text
+        }
+        // Neutralize backquotes already in the content so page text can't
+        // inject engine commands (the PC driver does the same).
+        var result = text.replacingOccurrences(of: "`", with: " ")
+        if let regex = Self.pauseRegex {
+            result = regex.stringByReplacingMatches(
+                in: result,
+                options: [],
+                range: NSRange(result.startIndex..., in: result),
+                withTemplate: "$1 `p1$2$3$4"
+            )
+        }
+        // Kill the end-of-utterance pause too (driver pauseMode >= 1),
+        // unless the text already ends in handled punctuation.
+        if let last = result.unicodeScalars.last,
+           !Self.pausePunctuation.contains(last) {
+            result += " `p1"
+        }
+        return result
     }
 
     // MARK: - Prosody mapping
