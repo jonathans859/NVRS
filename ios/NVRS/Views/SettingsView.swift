@@ -35,8 +35,8 @@ struct SettingsView: View {
                 rateSlider
                 pitchSlider
                 volumeSlider
-                Toggle("Shorten pauses (Eloquence)", isOn: $settings.shortenPauses)
-                    .accessibilityHint("Experimental. Injects Eloquence inline commands to shorten punctuation and chunk pauses, like the PC driver's shorten all pauses. Only works with an Eloquence voice; if you hear spoken command syntax, turn it off.")
+                Toggle("Shorten pauses", isOn: $settings.shortenPauses)
+                    .accessibilityHint("Removes pause-causing punctuation from spoken text and shortens explicit breaks, approximating the PC driver's shorten all pauses. Costs some sentence intonation. Works with any voice.")
             } header: {
                 Text("Speech")
             } footer: {
