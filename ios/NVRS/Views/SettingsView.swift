@@ -42,12 +42,10 @@ struct SettingsView: View {
                 rateSlider
                 pitchSlider
                 volumeSlider
-                Toggle("Shorten pauses", isOn: $settings.shortenPauses)
-                    .accessibilityHint("Shortens comma and sentence pauses without changing what is spoken: sentence punctuation is kept, only the pause after it is cut. Also shortens explicit breaks.")
             } header: {
                 Text("Speech")
             } footer: {
-                Text("NVDA's pitch, rate and volume changes are applied relative to these baselines. Pause shortening requires an Eloquence voice and is experimental — test with the speak test button.")
+                Text("NVDA's pitch, rate and volume changes are applied relative to these baselines.")
             }
 
             Section {

@@ -86,7 +86,6 @@ final class MirrorViewModel: ObservableObject {
         renderer.baseRate = effectiveRate()
         renderer.basePitch = Float(settings.basePitch)
         renderer.baseVolume = Float(settings.baseVolume)
-        renderer.shortenPauses = settings.shortenPauses
     }
 
     /// The phone voice, honoring "follow PC voice": an explicit mapping

@@ -66,12 +66,6 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(baseVolume, forKey: "baseVolume") }
     }
 
-    /// Experimental: inject Eloquence `p1 inline commands to shorten
-    /// pauses, mirroring the NVDA IBMTTS driver's "Shorten all pauses".
-    @Published var shortenPauses: Bool {
-        didSet { defaults.set(shortenPauses, forKey: "shortenPauses") }
-    }
-
     /// Switch the phone voice when the PC synth/voice changes, using the
     /// mapping table (or same-language auto pick when unmapped).
     @Published var followPCVoice: Bool {
@@ -112,7 +106,6 @@ final class SettingsStore: ObservableObject {
             ?? Double(AVSpeechUtteranceDefaultSpeechRate)
         basePitch = defaults.object(forKey: "basePitch") as? Double ?? 1.0
         baseVolume = defaults.object(forKey: "baseVolume") as? Double ?? 1.0
-        shortenPauses = defaults.object(forKey: "shortenPauses") as? Bool ?? false
         followPCVoice = defaults.object(forKey: "followPCVoice") as? Bool ?? true
         followPCRate = defaults.object(forKey: "followPCRate") as? Bool ?? true
         if let data = defaults.data(forKey: "pcVoices"),
