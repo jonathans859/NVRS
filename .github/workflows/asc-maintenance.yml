@@ -1,0 +1,22 @@
+name: ASC maintenance
+
+# Revokes CI-minted Apple Development certificates when the account hits
+# Apple's certificate cap (builds fail with "maximum number of
+# certificates"). Manual trigger; runs on free Linux minutes.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  revoke-dev-certs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install pyjwt cryptography requests
+      - name: Revoke CI-minted Development certificates
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: python tools/asc_revoke_dev_certs.py
