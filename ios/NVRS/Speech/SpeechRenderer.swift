@@ -36,17 +36,23 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
 
     /// Approximates the IBMTTS driver's "Shorten all pauses". Apple's
     /// Eloquence port does NOT parse ECI inline commands (`p1 is read
-    /// aloud — field-tested), so instead pause-position punctuation is
-    /// removed from the spoken text. NVDA already expanded any punctuation
-    /// the user wants *announced* into words upstream, so the stripped
-    /// characters only carried pause/intonation, not information.
+    /// aloud — field-tested), and stripping all punctuation broke meaning
+    /// (German ordinals, question intonation — field-tested too). Current
+    /// approach: strip only commas/semicolons in pause position, and cut
+    /// sentence pauses by splitting utterances at sentence boundaries —
+    /// every sentence keeps its punctuation, but the pause after it
+    /// becomes our (fast) queue hop instead of the engine's long one.
     var shortenPauses = false
 
-    /// Same pattern the NVDA IBMTTS driver uses (pause_re): punctuation
-    /// after a word and before whitespace/end is in pause position;
-    /// decimals and dates (digit right after the mark) never match.
-    private static let pauseRegex = try? NSRegularExpression(
-        pattern: "([a-zA-Z0-9]|\\s)([-,.:;)(?!\u{2013}\u{2014}])(\\2*?)(\\s|[\\\\/]|$)"
+    /// Commas/semicolons after a word, before whitespace/end: pure pause
+    /// prosody. Decimals ("1,5") never match — a digit follows the comma.
+    private static let commaPauseRegex = try? NSRegularExpression(
+        pattern: "([a-zA-Z0-9]|\\s)([,;])(\\2*?)(\\s|[\\\\/]|$)"
+    )
+
+    /// Whitespace right after sentence-final punctuation = split point.
+    private static let sentenceSplitRegex = try? NSRegularExpression(
+        pattern: "(?<=[.!?:])\\s+"
     )
 
     /// Called whenever the renderer starts or stops having work; drives
@@ -173,16 +179,18 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
             textRun.removeAll()
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
-            let utterance = AVSpeechUtterance(string: pauseShortenedText(text))
-            utterance.voice = voice(for: state.lang)
-            utterance.rate = mappedRate(state.rate)
-            utterance.pitchMultiplier = mappedPitch(state.pitch)
-            utterance.volume = mappedVolume(state.volume)
-            if pendingDelayMs > 0 {
-                utterance.preUtteranceDelay = TimeInterval(pendingDelayMs) / 1000.0
-                pendingDelayMs = 0
+            for fragment in speakableFragments(of: text) {
+                let utterance = AVSpeechUtterance(string: fragment)
+                utterance.voice = voice(for: state.lang)
+                utterance.rate = mappedRate(state.rate)
+                utterance.pitchMultiplier = mappedPitch(state.pitch)
+                utterance.volume = mappedVolume(state.volume)
+                if pendingDelayMs > 0 {
+                    utterance.preUtteranceDelay = TimeInterval(pendingDelayMs) / 1000.0
+                    pendingDelayMs = 0
+                }
+                steps.append(.utterance(utterance))
             }
-            steps.append(.utterance(utterance))
         }
 
         for item in envelope.items {
@@ -239,14 +247,31 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
 
     // MARK: - Pause shortening
 
-    private func pauseShortenedText(_ text: String) -> String {
-        guard shortenPauses, let regex = Self.pauseRegex else { return text }
-        return regex.stringByReplacingMatches(
-            in: text,
+    /// With shortening off: the text as one fragment. With it on: commas
+    /// de-paused, then split at sentence boundaries (punctuation kept)
+    /// so the engine's sentence pause is replaced by the queue hop.
+    private func speakableFragments(of text: String) -> [String] {
+        guard shortenPauses else { return [text] }
+        var result = text
+        if let commaRegex = Self.commaPauseRegex {
+            result = commaRegex.stringByReplacingMatches(
+                in: result,
+                options: [],
+                range: NSRange(result.startIndex..., in: result),
+                withTemplate: "$1$4"
+            )
+        }
+        guard let splitRegex = Self.sentenceSplitRegex else { return [result] }
+        let marked = splitRegex.stringByReplacingMatches(
+            in: result,
             options: [],
-            range: NSRange(text.startIndex..., in: text),
-            withTemplate: "$1$4"
+            range: NSRange(result.startIndex..., in: result),
+            withTemplate: "\n"
         )
+        return marked
+            .split(separator: "\n")
+            .map(String.init)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
     }
 
     // MARK: - Prosody mapping

@@ -43,7 +43,7 @@ struct SettingsView: View {
                 pitchSlider
                 volumeSlider
                 Toggle("Shorten pauses", isOn: $settings.shortenPauses)
-                    .accessibilityHint("Removes pause-causing punctuation from spoken text and shortens explicit breaks, approximating the PC driver's shorten all pauses. Costs some sentence intonation. Works with any voice.")
+                    .accessibilityHint("Shortens comma and sentence pauses without changing what is spoken: sentence punctuation is kept, only the pause after it is cut. Also shortens explicit breaks.")
             } header: {
                 Text("Speech")
             } footer: {
