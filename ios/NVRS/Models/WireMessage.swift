@@ -113,7 +113,17 @@ enum ServerMessage {
     case speech(SpeechEnvelope)
     case cancel
     case synthConfig(SynthConfig)
+    /// A standalone beep (progress bars, add-on sounds) outside any
+    /// speech sequence; played immediately, not queued behind speech.
+    case beep(hz: Double, ms: Double, left: Double, right: Double)
     case unknown
+}
+
+private struct BeepMessage: Decodable {
+    let hz: Double?
+    let ms: Double?
+    let left: Double?
+    let right: Double?
 }
 
 enum WireParser {
@@ -134,6 +144,10 @@ enum WireParser {
             return .cancel
         case "synthConfig":
             return (try? decoder.decode(SynthConfig.self, from: data)).map { .synthConfig($0) }
+        case "beep":
+            return (try? decoder.decode(BeepMessage.self, from: data)).map {
+                .beep(hz: $0.hz ?? 440, ms: $0.ms ?? 40, left: $0.left ?? 50, right: $0.right ?? 50)
+            }
         default:
             return .unknown
         }

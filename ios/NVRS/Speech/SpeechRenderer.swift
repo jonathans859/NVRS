@@ -66,6 +66,12 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         speakNextIfIdle()
     }
 
+    /// Plays a standalone beep right away, bypassing the speech queue —
+    /// mirrors NVDA's asynchronous tones.beep.
+    func playImmediateBeep(hz: Double, ms: Double, pan: Float) {
+        beepPlayer.play(hz: hz, ms: ms, pan: pan)
+    }
+
     func cancelAll() {
         pending.removeAll()
         interruptCurrentUtterance()

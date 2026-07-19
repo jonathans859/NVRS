@@ -194,6 +194,11 @@ final class MirrorViewModel: ObservableObject {
             }
         case .cancel:
             renderer.cancelAll()
+        case .beep(let hz, let ms, let left, let right):
+            if !isLocalSpeechMuted {
+                audioSession.speechActivity()
+                renderer.playImmediateBeep(hz: hz, ms: ms, pan: Float((right - left) / 100.0))
+            }
         case .synthConfig(let config):
             // Informational in v1: offsets are applied to the local baseline.
             pcSynthDescription = config.voiceName ?? config.synth

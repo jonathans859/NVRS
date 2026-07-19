@@ -69,6 +69,15 @@ interrupt). A speech envelope with `"priority": "now"` implies the same
 before speaking.
 
 ```json
+{"type": "beep", "hz": 550, "ms": 50, "left": 50, "right": 50}
+```
+A standalone beep outside any speech sequence (progress bars, add-on
+sounds; captured via NVDA's `tones.decide_beep`). Played immediately on
+arrival, independent of the speech queue. Beeps *inside* speech sequences
+travel as envelope items instead (`isSpeechBeepCommand` beeps are not
+forwarded here, avoiding doubles).
+
+```json
 {"type": "synthConfig", "synth": "oneCore", "voice": "…", "voiceName": "…",
  "lang": "en_US", "rate": 50, "pitch": 50, "volume": 100}
 ```

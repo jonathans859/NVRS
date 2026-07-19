@@ -17,6 +17,7 @@ import speech
 import speech.extensions
 import speech.manager
 import synthDriverHandler
+import tones
 import ui
 import wx
 
@@ -79,6 +80,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		self._usingOfficialHook = hasattr(speech.extensions, "pre_speechQueued")
 		self._origManagerSpeak = None
 		self._registerSpeechHooks()
+		tones.decide_beep.register(self._onDecideBeep)
 		synthDriverHandler.synthChanged.register(self._onSynthChanged)
 		self._pollStop = threading.Event()
 		self._pollThread = threading.Thread(
@@ -101,6 +103,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		elif self._origManagerSpeak is not None:
 			speech.manager.SpeechManager.speak = self._origManagerSpeak
 		speech.extensions.speechCanceled.unregister(self._onSpeechCanceled)
+		tones.decide_beep.unregister(self._onDecideBeep)
 		synthDriverHandler.synthChanged.unregister(self._onSynthChanged)
 		self._stopTransport()
 		super().terminate()
@@ -145,6 +148,19 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		transport = self._transport
 		if transport is not None and not self._muted:
 			transport.send({"type": "cancel"})
+
+	def _onDecideBeep(
+		self, hz=None, length=None, left=50, right=50, isSpeechBeepCommand=False, **kwargs
+	):
+		# Beeps embedded in speech sequences are already mirrored as
+		# envelope items; forwarding them here too would double-beep.
+		transport = self._transport
+		if transport is not None and not self._muted and not isSpeechBeepCommand and hz:
+			transport.send(
+				{"type": "beep", "hz": hz, "ms": length, "left": left, "right": right}
+			)
+		# Always keep playing the beep locally on the PC.
+		return True
 
 	def _onSynthChanged(self, **kwargs):
 		wx.CallAfter(self._sendSynthConfig)
