@@ -7,6 +7,7 @@ final class MirrorViewModel: ObservableObject {
     @Published private(set) var connectionState: TransportState = .idle
     @Published private(set) var lastSpoken: String = ""
     @Published private(set) var pcSynthDescription: String?
+    @Published private(set) var pcConfig: SynthConfig?
     @Published var isConnectEnabled = false
     @Published var isLocalSpeechMuted = false
 
@@ -80,11 +81,70 @@ final class MirrorViewModel: ObservableObject {
     }
 
     private func applyBaselines() {
-        renderer.baseVoiceIdentifier = settings.voiceIdentifier
-        renderer.baseRate = Float(settings.baseRate)
+        renderer.baseVoiceIdentifier = effectiveVoiceIdentifier()
+        renderer.baseRate = effectiveRate()
         renderer.basePitch = Float(settings.basePitch)
         renderer.baseVolume = Float(settings.baseVolume)
         renderer.shortenPauses = settings.shortenPauses
+    }
+
+    /// The phone voice, honoring "follow PC voice": an explicit mapping
+    /// wins; otherwise auto-pick a same-language sibling of the user's
+    /// chosen voice (PC English Eloquence → phone English Eloquence).
+    private func effectiveVoiceIdentifier() -> String? {
+        guard settings.followPCVoice, let config = pcConfig else {
+            return settings.voiceIdentifier
+        }
+        let key = Self.pcVoiceKey(for: config)
+        if let mapped = settings.pcVoices.first(where: { $0.key == key })?.phoneVoiceId {
+            return mapped
+        }
+        if let lang = config.lang, let auto = Self.autoVoice(
+            forPCLang: lang,
+            near: settings.voiceIdentifier
+        ) {
+            return auto
+        }
+        return settings.voiceIdentifier
+    }
+
+    private func effectiveRate() -> Float {
+        if settings.followPCRate, let rate = pcConfig?.rate {
+            // NVDA's 0–100 onto AVSpeech's 0–1 (default 0.5 = NVDA 50).
+            return min(max(Float(rate) / 100.0, 0.05), 1.0)
+        }
+        return Float(settings.baseRate)
+    }
+
+    static func pcVoiceKey(for config: SynthConfig) -> String {
+        "\(config.synth)|\(config.voice ?? "")"
+    }
+
+    /// Same persona in the target language if available (Apple Eloquence
+    /// personas exist per language), then same engine family, then any
+    /// voice of that language.
+    static func autoVoice(forPCLang lang: String, near currentId: String?) -> String? {
+        let bcp47 = lang.replacingOccurrences(of: "_", with: "-")
+        let primary = bcp47.prefix(2)
+        let candidates = AVSpeechSynthesisVoice.speechVoices().filter {
+            $0.language == bcp47 || $0.language.prefix(2) == primary
+        }
+        guard !candidates.isEmpty else { return nil }
+        let exact = candidates.filter { $0.language == bcp47 }
+        let pool = exact.isEmpty ? candidates : exact
+        if let currentId, let current = AVSpeechSynthesisVoice(identifier: currentId) {
+            if current.language.prefix(2) == primary {
+                return currentId // already speaking that language
+            }
+            if let samePersona = pool.first(where: { $0.name == current.name }) {
+                return samePersona.identifier
+            }
+            let family = currentId.split(separator: ".").dropLast(2).joined(separator: ".")
+            if !family.isEmpty, let sameFamily = pool.first(where: { $0.identifier.hasPrefix(family) }) {
+                return sameFamily.identifier
+            }
+        }
+        return AVSpeechSynthesisVoice(language: bcp47)?.identifier ?? pool.first?.identifier
     }
 
     // MARK: - Connection control
@@ -211,11 +271,23 @@ final class MirrorViewModel: ObservableObject {
                 renderer.playImmediateBeep(hz: hz, ms: ms, pan: Float((right - left) / 100.0))
             }
         case .synthConfig(let config):
-            // Informational in v1: offsets are applied to the local baseline.
+            pcConfig = config
             pcSynthDescription = config.voiceName ?? config.synth
+            recordPCVoice(config)
+            // Re-derive voice/rate in case "follow PC" settings are on.
+            applyBaselines()
         case .unknown:
             break
         }
+    }
+
+    private func recordPCVoice(_ config: SynthConfig) {
+        let key = Self.pcVoiceKey(for: config)
+        guard !settings.pcVoices.contains(where: { $0.key == key }) else { return }
+        let label = "\(config.voiceName ?? config.voice ?? "?") (\(config.synth))"
+        settings.pcVoices.append(
+            PCVoice(key: key, label: label, lang: config.lang, phoneVoiceId: nil)
+        )
     }
 
     // MARK: - Status text

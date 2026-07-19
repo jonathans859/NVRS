@@ -8,6 +8,17 @@ struct NotificationFilter: Identifiable, Codable, Equatable {
     var isEnabled = true
 }
 
+/// A PC-side voice observed in synthConfig messages, optionally mapped to
+/// a specific iPhone voice.
+struct PCVoice: Identifiable, Codable, Equatable {
+    var key: String // "<synth>|<voice id>"
+    var label: String // e.g. "German (ibmeci)"
+    var lang: String?
+    var phoneVoiceId: String?
+
+    var id: String { key }
+}
+
 /// All user settings. UserDefaults-backed except the shared secret, which
 /// lives in the keychain.
 @MainActor
@@ -61,6 +72,26 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(shortenPauses, forKey: "shortenPauses") }
     }
 
+    /// Switch the phone voice when the PC synth/voice changes, using the
+    /// mapping table (or same-language auto pick when unmapped).
+    @Published var followPCVoice: Bool {
+        didSet { defaults.set(followPCVoice, forKey: "followPCVoice") }
+    }
+
+    /// Track the PC's NVDA rate instead of the local rate slider.
+    @Published var followPCRate: Bool {
+        didSet { defaults.set(followPCRate, forKey: "followPCRate") }
+    }
+
+    /// PC voices seen so far, with optional per-voice phone mappings.
+    @Published var pcVoices: [PCVoice] {
+        didSet {
+            if let data = try? JSONEncoder().encode(pcVoices) {
+                defaults.set(data, forKey: "pcVoices")
+            }
+        }
+    }
+
     @Published var filters: [NotificationFilter] {
         didSet {
             if let data = try? JSONEncoder().encode(filters) {
@@ -82,6 +113,14 @@ final class SettingsStore: ObservableObject {
         basePitch = defaults.object(forKey: "basePitch") as? Double ?? 1.0
         baseVolume = defaults.object(forKey: "baseVolume") as? Double ?? 1.0
         shortenPauses = defaults.object(forKey: "shortenPauses") as? Bool ?? false
+        followPCVoice = defaults.object(forKey: "followPCVoice") as? Bool ?? true
+        followPCRate = defaults.object(forKey: "followPCRate") as? Bool ?? true
+        if let data = defaults.data(forKey: "pcVoices"),
+           let stored = try? JSONDecoder().decode([PCVoice].self, from: data) {
+            pcVoices = stored
+        } else {
+            pcVoices = []
+        }
         if let data = defaults.data(forKey: "filters"),
            let stored = try? JSONDecoder().decode([NotificationFilter].self, from: data) {
             filters = stored

@@ -28,9 +28,16 @@ struct SettingsView: View {
 
             Section {
                 NavigationLink {
-                    VoicePickerView()
+                    VoicePickerView(selection: $settings.voiceIdentifier)
                 } label: {
                     LabeledContent("Voice", value: settings.voiceDisplayName)
+                }
+                Toggle("Follow PC voice", isOn: $settings.followPCVoice)
+                    .accessibilityHint("Switches the phone voice when NVDA's synth or voice changes, using the mapping below or the same language automatically.")
+                Toggle("Follow PC rate", isOn: $settings.followPCRate)
+                    .accessibilityHint("Tracks NVDA's speech rate instead of the local rate slider.")
+                NavigationLink("PC voice mapping") {
+                    PCVoiceMappingView()
                 }
                 rateSlider
                 pitchSlider

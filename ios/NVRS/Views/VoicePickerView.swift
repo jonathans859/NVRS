@@ -2,7 +2,10 @@ import AVFoundation
 import SwiftUI
 
 struct VoicePickerView: View {
-    @EnvironmentObject private var settings: SettingsStore
+    /// Selected iOS voice identifier; nil = the `noneLabel` option.
+    @Binding var selection: String?
+    var title: String = String(localized: "Voice")
+    var noneLabel: String = String(localized: "System default")
 
     private var voicesByLanguage: [(language: String, voices: [AVSpeechSynthesisVoice])] {
         let grouped = Dictionary(grouping: AVSpeechSynthesisVoice.speechVoices()) { $0.language }
@@ -14,7 +17,7 @@ struct VoicePickerView: View {
     var body: some View {
         List {
             Section {
-                selectionRow(title: String(localized: "System default"), identifier: nil)
+                selectionRow(title: noneLabel, identifier: nil)
             }
             ForEach(voicesByLanguage, id: \.language) { group in
                 Section {
@@ -26,24 +29,24 @@ struct VoicePickerView: View {
                 }
             }
         }
-        .navigationTitle("Voice")
+        .navigationTitle(title)
     }
 
     private func selectionRow(title: String, identifier: String?) -> some View {
         Button {
-            settings.voiceIdentifier = identifier
+            selection = identifier
         } label: {
             HStack {
                 Text(title)
                     .foregroundStyle(.primary)
                 Spacer()
-                if settings.voiceIdentifier == identifier {
+                if selection == identifier {
                     Image(systemName: "checkmark")
                         .accessibilityHidden(true)
                 }
             }
         }
-        .accessibilityAddTraits(settings.voiceIdentifier == identifier ? [.isSelected] : [])
+        .accessibilityAddTraits(selection == identifier ? [.isSelected] : [])
     }
 
     private func languageName(_ code: String) -> String {
