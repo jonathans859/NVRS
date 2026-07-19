@@ -1,6 +1,26 @@
 import AVFoundation
 import Foundation
 
+#if os(macOS)
+
+/// macOS has no AVAudioSession and no app suspension: audio always plays,
+/// the process keeps running, and nothing ducks. Same surface as the iOS
+/// controller so the view model stays platform-free; every call is a no-op.
+@MainActor
+final class AudioSessionController {
+    private(set) var lastError: String?
+    var isRendererIdle: (() -> Bool)?
+    var startSilentEngine: (() -> Void)?
+    var stopSilentEngine: (() -> Void)?
+
+    func setKeepAliveWanted(_ wanted: Bool) {}
+    func speechActivity() {}
+    func rendererBecameIdle() {}
+    func shutdown() {}
+}
+
+#else
+
 /// Manages the playback session across three modes:
 ///
 /// - `speaking`: mirrored speech is flowing — duck music, pause podcasts,
@@ -139,3 +159,5 @@ final class AudioSessionController {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }
+
+#endif

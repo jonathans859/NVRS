@@ -1,71 +1,103 @@
-# NVRS TestFlight lane: Apple cloud signing via the ASC API key.
+# NVRS TestFlight lanes: Apple cloud signing via the ASC API key.
 # No match, no certificate secrets; Apple holds the distribution key.
 # Optional: DEV_CERT_P12_BASE64/DEV_CERT_P12_PASSWORD provide a cached
 # Development certificate so runners don't mint a new one per build
-# (Apple caps those). Without it the lane still works until the cap.
+# (Apple caps those). Without it the lanes still work until the cap.
 
 default_platform(:ios)
 
+def nvrs_asc_key
+  app_store_connect_api_key(
+    key_id: ENV["ASC_KEY_ID"],
+    issuer_id: ENV["ASC_ISSUER_ID"],
+    key_content: ENV["ASC_KEY_P8"],
+    is_key_content_base64: false,
+  )
+end
+
+def nvrs_import_cached_dev_cert
+  return if ENV["DEV_CERT_P12_BASE64"].to_s.strip == ""
+
+  require "base64"
+  cert_path = File.absolute_path(File.join(Dir.tmpdir, "nvrs-dev-cert.p12"))
+  File.binwrite(cert_path, Base64.decode64(ENV["DEV_CERT_P12_BASE64"]))
+  import_certificate(
+    certificate_path: cert_path,
+    certificate_password: ENV["DEV_CERT_P12_PASSWORD"].to_s,
+    keychain_name: "fastlane_tmp_keychain",
+    keychain_password: "",
+  )
+  unless sh("security find-identity -v -p codesigning", log: false).include?("Apple Development")
+    UI.user_error!("Development certificate did not import - check DEV_CERT_P12_* secrets (p12 must be legacy/SHA1 format)")
+  end
+end
+
+# Archive + export a scheme with Apple cloud signing. The archive step
+# needs the auth flags in xcargs; gym adds them to the export step itself
+# once app_store_connect_api_key has run.
+def nvrs_build(scheme:)
+  update_code_signing_settings(
+    use_automatic_signing: true,
+    team_id: ENV["APPLE_TEAM_ID"],
+    path: "NVRS.xcodeproj",
+  )
+
+  key_path = File.absolute_path(File.join(Dir.tmpdir, "nvrs-asc-authkey.p8"))
+  File.write(key_path, ENV["ASC_KEY_P8"])
+
+  build_app(
+    project: "NVRS.xcodeproj",
+    scheme: scheme,
+    output_directory: "build",
+    output_name: "NVRS",
+    export_method: "app-store",
+    export_options: {
+      signingStyle: "automatic",
+      teamID: ENV["APPLE_TEAM_ID"],
+      destination: "export",
+    },
+    xcargs: [
+      "-allowProvisioningUpdates",
+      "-authenticationKeyPath #{key_path}",
+      "-authenticationKeyID #{ENV['ASC_KEY_ID']}",
+      "-authenticationKeyIssuerID #{ENV['ASC_ISSUER_ID']}",
+      "DEVELOPMENT_TEAM=#{ENV['APPLE_TEAM_ID']}",
+      "CURRENT_PROJECT_VERSION=#{ENV['BUILD_NUMBER'] || '1'}",
+    ].join(" "),
+  )
+end
+
+def nvrs_changelog
+  ENV["CHANGELOG"].to_s.strip.empty? ? "Automated build" : ENV["CHANGELOG"]
+end
+
 platform :ios do
-  desc "Build and upload to TestFlight"
+  desc "Build and upload the iOS app to TestFlight"
   lane :beta do
     setup_ci
-    app_store_connect_api_key(
-      key_id: ENV["ASC_KEY_ID"],
-      issuer_id: ENV["ASC_ISSUER_ID"],
-      key_content: ENV["ASC_KEY_P8"],
-      is_key_content_base64: false,
-    )
-
-    if ENV["DEV_CERT_P12_BASE64"].to_s.strip != ""
-      require "base64"
-      cert_path = File.absolute_path(File.join(Dir.tmpdir, "nvrs-dev-cert.p12"))
-      File.binwrite(cert_path, Base64.decode64(ENV["DEV_CERT_P12_BASE64"]))
-      import_certificate(
-        certificate_path: cert_path,
-        certificate_password: ENV["DEV_CERT_P12_PASSWORD"].to_s,
-        keychain_name: "fastlane_tmp_keychain",
-        keychain_password: "",
-      )
-      unless sh("security find-identity -v -p codesigning", log: false).include?("Apple Development")
-        UI.user_error!("Development certificate did not import - check DEV_CERT_P12_* secrets (p12 must be legacy/SHA1 format)")
-      end
-    end
-
-    update_code_signing_settings(
-      use_automatic_signing: true,
-      team_id: ENV["APPLE_TEAM_ID"],
-      path: "NVRS.xcodeproj",
-    )
-
-    key_path = File.absolute_path(File.join(Dir.tmpdir, "nvrs-asc-authkey.p8"))
-    File.write(key_path, ENV["ASC_KEY_P8"])
-
-    build_app(
-      project: "NVRS.xcodeproj",
-      scheme: "NVRS",
-      output_directory: "build",
-      export_method: "app-store",
-      export_options: {
-        signingStyle: "automatic",
-        teamID: ENV["APPLE_TEAM_ID"],
-        destination: "export",
-      },
-      # Auth flags belong in xcargs only; gym adds them to the export step
-      # itself once app_store_connect_api_key has run.
-      xcargs: [
-        "-allowProvisioningUpdates",
-        "-authenticationKeyPath #{key_path}",
-        "-authenticationKeyID #{ENV['ASC_KEY_ID']}",
-        "-authenticationKeyIssuerID #{ENV['ASC_ISSUER_ID']}",
-        "DEVELOPMENT_TEAM=#{ENV['APPLE_TEAM_ID']}",
-        "CURRENT_PROJECT_VERSION=#{ENV['BUILD_NUMBER'] || '1'}",
-      ].join(" "),
-    )
-
+    nvrs_asc_key
+    nvrs_import_cached_dev_cert
+    nvrs_build(scheme: "NVRS")
     upload_to_testflight(
       skip_waiting_for_build_processing: true,
-      changelog: ENV["CHANGELOG"].to_s.strip.empty? ? "Automated build" : ENV["CHANGELOG"],
+      changelog: nvrs_changelog,
+    )
+  end
+end
+
+platform :mac do
+  desc "Build and upload the macOS app to TestFlight (same bundle id / ASC record)"
+  lane :beta do
+    setup_ci
+    nvrs_asc_key
+    nvrs_import_cached_dev_cert
+    nvrs_build(scheme: "NVRSMac")
+    # Mac App Store export produces a signed installer pkg.
+    upload_to_testflight(
+      app_platform: "osx",
+      pkg: "build/NVRS.pkg",
+      skip_waiting_for_build_processing: true,
+      changelog: nvrs_changelog,
     )
   end
 end

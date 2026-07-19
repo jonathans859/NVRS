@@ -9,19 +9,20 @@ struct SettingsView: View {
         Form {
             Section {
                 TextField("Tailscale IP or hostname", text: $settings.host)
-                    .keyboardType(.URL)
+                    .hostFieldTraits()
                     .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
                     .accessibilityLabel("PC address")
                     .accessibilityHint("The PC's Tailscale IP or MagicDNS name.")
                 TextField("Port", value: $settings.port, format: .number.grouping(.never))
-                    .keyboardType(.numberPad)
+                    .numberFieldTraits()
                     .accessibilityHint("Must match the port in NVDA's NVRS settings. Default 6877.")
                 SecureField("Shared secret", text: $settings.secret)
                     .accessibilityHint("Must match the shared secret set in NVDA's NVRS settings panel.")
                 Toggle("Connect automatically", isOn: $settings.autoConnect)
+                #if os(iOS)
                 Toggle("Stay awake in background", isOn: $settings.keepAliveInBackground)
                     .accessibilityHint("Keeps the connection alive while the phone is locked or the app is in the background, at some battery cost. Takes full effect on reconnect.")
+                #endif
             } header: {
                 Text("Connection")
             }
@@ -78,5 +79,25 @@ struct SettingsView: View {
             Text("Volume")
         }
         .accessibilityValue("\(Int(settings.baseVolume * 100)) percent")
+    }
+}
+
+/// Soft-keyboard traits exist only on iOS; macOS text fields take the
+/// string as typed.
+private extension View {
+    func hostFieldTraits() -> some View {
+        #if os(iOS)
+        return self.keyboardType(.URL).textInputAutocapitalization(.never)
+        #else
+        return self
+        #endif
+    }
+
+    func numberFieldTraits() -> some View {
+        #if os(iOS)
+        return self.keyboardType(.numberPad)
+        #else
+        return self
+        #endif
     }
 }

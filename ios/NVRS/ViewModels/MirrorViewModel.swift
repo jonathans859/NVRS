@@ -1,7 +1,11 @@
 import AVFoundation
 import Combine
 import Foundation
+#if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
 @MainActor
 final class MirrorViewModel: ObservableObject {
@@ -50,8 +54,10 @@ final class MirrorViewModel: ObservableObject {
         renderer.onUtteranceStarted = { [weak self] in
             self?.utterancesStarted += 1
         }
-        // A connection that died while suspended shows up as failed only
-        // after backoff; on return to foreground, reconnect right away.
+        // A connection that died while the app couldn't run shows up as
+        // failed only after backoff; reconnect right away instead when the
+        // app returns to the foreground (iOS) or the Mac wakes from sleep.
+        #if os(iOS)
         NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
             object: nil,
@@ -61,6 +67,17 @@ final class MirrorViewModel: ObservableObject {
                 self?.reconnectAfterForeground()
             }
         }
+        #elseif os(macOS)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.reconnectAfterForeground()
+            }
+        }
+        #endif
         applyBaselines()
         filterEngine.filters = settings.filters
         // React to settings changes: update baselines/filters live.
@@ -200,11 +217,16 @@ final class MirrorViewModel: ObservableObject {
     func speakTest() {
         audioSession.speechActivity()
         audioError = audioSession.lastError
+        #if os(macOS)
+        let phrase = "NVRS test. Speech on this Mac is working."
+        #else
+        let phrase = "NVRS test. Speech on this iPhone is working."
+        #endif
         let envelope = SpeechEnvelope(
             seq: 0,
             priority: .now,
             ts: 0,
-            items: [.text("NVRS test. Speech on this iPhone is working.")]
+            items: [.text(phrase)]
         )
         renderer.enqueue(envelope)
     }
@@ -215,9 +237,8 @@ final class MirrorViewModel: ObservableObject {
         if isLocalSpeechMuted {
             renderer.cancelAll()
         }
-        UIAccessibility.post(
-            notification: .announcement,
-            argument: isLocalSpeechMuted
+        Announce.post(
+            isLocalSpeechMuted
                 ? String(localized: "NVRS speech off")
                 : String(localized: "NVRS speech on")
         )
@@ -231,15 +252,9 @@ final class MirrorViewModel: ObservableObject {
             let wasConnected = connectionState == .connected
             connectionState = state
             if state == .connected {
-                UIAccessibility.post(
-                    notification: .announcement,
-                    argument: String(localized: "NVRS connected")
-                )
+                Announce.post(String(localized: "NVRS connected"))
             } else if wasConnected {
-                UIAccessibility.post(
-                    notification: .announcement,
-                    argument: String(localized: "NVRS connection lost")
-                )
+                Announce.post(String(localized: "NVRS connection lost"))
             }
         case .message(let message):
             handle(message)

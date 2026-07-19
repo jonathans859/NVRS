@@ -45,7 +45,9 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     override init() {
         super.init()
         synthesizer.delegate = self
+        #if os(iOS)
         synthesizer.usesApplicationAudioSession = true
+        #endif
     }
 
     // MARK: - Public API (main thread)
