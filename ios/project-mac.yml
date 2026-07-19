@@ -1,0 +1,44 @@
+# Standalone spec for the macOS app. Separate from project.yml on purpose:
+# fastlane/gym inspects "the project's" build settings through the first
+# scheme it finds, so a combined iOS+macOS project makes it (mis)detect the
+# mac build as iOS and package an ipa instead of a pkg. One project per
+# platform keeps detection deterministic. Keep MARKETING_VERSION in sync
+# with project.yml.
+name: NVRSMac
+options:
+  bundleIdPrefix: com.jonathan859
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  # Same bundle id as iOS (universal purchase, one ASC record), same
+  # shared sources; platform differences live behind #if os() in code.
+  NVRSMac:
+    type: application
+    platform: macOS
+    sources:
+      - NVRS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jonathan859.nvrs
+        PRODUCT_NAME: NVRS
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIconMac
+    info:
+      # Outside the shared NVRS/ sources dir so the source glob never sees it.
+      path: Info-macOS.plist
+      properties:
+        CFBundleDisplayName: NVRS
+        ITSAppUsesNonExemptEncryption: false
+        LSApplicationCategoryType: public.app-category.utilities
+    entitlements:
+      path: NVRSMac.entitlements
+      properties:
+        # App Sandbox is mandatory for Mac App Store / TestFlight builds;
+        # outgoing TCP to the PC needs the network client exception.
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true

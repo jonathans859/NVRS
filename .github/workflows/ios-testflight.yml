@@ -82,7 +82,7 @@ jobs:
       - name: Generate Xcode project
         run: |
           brew install xcodegen
-          xcodegen generate
+          xcodegen generate --spec project-mac.yml
 
       - uses: ruby/setup-ruby@v1
         with:

@@ -12,6 +12,7 @@ dist/
 ios/build/
 ios/DerivedData/
 ios/NVRS.xcodeproj/
+ios/NVRSMac.xcodeproj/
 ios/NVRS/Info.plist
 ios/Info-macOS.plist
 ios/NVRSMac.entitlements
