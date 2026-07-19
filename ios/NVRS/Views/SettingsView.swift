@@ -20,6 +20,8 @@ struct SettingsView: View {
                 SecureField("Shared secret", text: $settings.secret)
                     .accessibilityHint("Must match the shared secret set in NVDA's NVRS settings panel.")
                 Toggle("Connect automatically", isOn: $settings.autoConnect)
+                Toggle("Stay awake in background", isOn: $settings.keepAliveInBackground)
+                    .accessibilityHint("Keeps the connection alive while the phone is locked or the app is in the background, at some battery cost. Takes full effect on reconnect.")
             } header: {
                 Text("Connection")
             }

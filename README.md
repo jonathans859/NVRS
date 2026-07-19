@@ -34,9 +34,13 @@ secret in Settings. Pick any installed iOS voice and baseline rate/pitch/
 volume — NVDA's prosody changes apply *relative to* that baseline. Two-finger
 double tap (magic tap) mutes/unmutes local speech anywhere in the app.
 
-Background playback uses the `audio` background mode with a `.playback`
-session held only while speech flows; after ~2 min of silence the session
-lapses and the app reconnects cleanly the next time it runs.
+Background playback uses the `audio` background mode. With "Stay awake in
+background" on (the default), a silent engine keeps rendering while
+connected so iOS never suspends the app — speech reaches the phone in your
+pocket even after long quiet stretches (idle mode mixes with other audio
+instead of ducking it, and uses a long IO buffer to keep battery cost low).
+With it off, the session lapses ~2 min after the last speech and the app
+reconnects on next foreground.
 
 ## CI / TestFlight
 

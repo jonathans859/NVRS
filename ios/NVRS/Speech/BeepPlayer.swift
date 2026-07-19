@@ -25,6 +25,18 @@ final class BeepPlayer {
         return true
     }
 
+    /// The running engine renders silence between beeps, which doubles as
+    /// the background keep-alive ("playing audio" as far as iOS cares).
+    func startKeepAlive() {
+        _ = ensureRunning()
+    }
+
+    func stopKeepAlive() {
+        if engine.isRunning {
+            engine.stop()
+        }
+    }
+
     func play(hz: Double, ms: Double, pan: Float) {
         guard hz > 0, ms > 0, ensureRunning() else { return }
         guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else { return }

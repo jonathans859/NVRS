@@ -38,6 +38,12 @@ final class MirrorViewModel: ObservableObject {
         audioSession.isRendererIdle = { [weak self] in
             self?.renderer.isIdle ?? true
         }
+        audioSession.startSilentEngine = { [weak self] in
+            self?.renderer.startAudioKeepAlive()
+        }
+        audioSession.stopSilentEngine = { [weak self] in
+            self?.renderer.stopAudioKeepAlive()
+        }
         renderer.onUtteranceStarted = { [weak self] in
             self?.utterancesStarted += 1
         }
@@ -62,6 +68,9 @@ final class MirrorViewModel: ObservableObject {
                     guard let self else { return }
                     self.applyBaselines()
                     self.filterEngine.filters = self.settings.filters
+                    self.audioSession.setKeepAliveWanted(
+                        self.settings.keepAliveInBackground && self.isConnectEnabled
+                    )
                 }
             }
             .store(in: &cancellables)
@@ -103,6 +112,7 @@ final class MirrorViewModel: ObservableObject {
         transport = tcp
         isConnectEnabled = true
         tcp.start()
+        audioSession.setKeepAliveWanted(settings.keepAliveInBackground)
     }
 
     func disconnect() {

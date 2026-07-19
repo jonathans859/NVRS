@@ -1,16 +1,30 @@
 import AVFoundation
 import Foundation
 
-/// Holds an active playback session while speech is flowing, and lets it
-/// lapse after a quiet stretch. Deliberately no keep-alive tricks: if NVDA
-/// goes silent for a long time the app may be suspended, and the transport
-/// reconnects cleanly on the next foreground.
+/// Manages the playback session across three modes:
+///
+/// - `speaking`: mirrored speech is flowing — duck music, pause podcasts,
+///   low-latency IO buffer.
+/// - `idleKeepAlive`: connected but quiet — session stays active and a
+///   silent engine keeps rendering so iOS doesn't suspend the app (the
+///   pocket use case). No ducking, and a long IO buffer (~10 wakeups/s)
+///   keeps the battery cost low.
+/// - `inactive`: not connected or keep-alive disabled — session released.
 @MainActor
 final class AudioSessionController {
-    /// How long the session is kept active after the last speech.
-    private let idleGraceSeconds: TimeInterval = 120
+    private enum Mode {
+        case inactive
+        case idleKeepAlive
+        case speaking
+    }
 
-    private var isActive = false
+    /// How long after the last speech before dropping back to idle mode.
+    private let idleGraceSeconds: TimeInterval = 120
+    private let speakingBufferDuration: TimeInterval = 0.02
+    private let idleBufferDuration: TimeInterval = 0.1
+
+    private var mode: Mode = .inactive
+    private var keepAliveWanted = false
     private var idleWork: DispatchWorkItem?
 
     /// Last activation failure, for the diagnostics UI. Nil when healthy.
@@ -19,10 +33,31 @@ final class AudioSessionController {
     /// True while the renderer still has queued work; checked before lapsing.
     var isRendererIdle: (() -> Bool)?
 
+    /// Start/stop the silent rendering engine (the renderer's beep engine
+    /// doubles as it); set by the view model.
+    var startSilentEngine: (() -> Void)?
+    var stopSilentEngine: (() -> Void)?
+
+    /// Keep-alive intent: on while the user wants a connection and the
+    /// setting is enabled. Holds the app alive in background to receive
+    /// and reconnect.
+    func setKeepAliveWanted(_ wanted: Bool) {
+        keepAliveWanted = wanted
+        if wanted {
+            if mode == .inactive {
+                enterIdleKeepAlive()
+            } else if mode == .speaking {
+                startSilentEngine?()
+            }
+        } else if mode == .idleKeepAlive {
+            deactivate()
+        }
+    }
+
     func speechActivity() {
         idleWork?.cancel()
         idleWork = nil
-        activate()
+        enterSpeaking()
     }
 
     func rendererBecameIdle() {
@@ -32,34 +67,58 @@ final class AudioSessionController {
     func shutdown() {
         idleWork?.cancel()
         idleWork = nil
+        keepAliveWanted = false
         deactivate()
     }
 
-    private func activate() {
-        guard !isActive else { return }
+    // MARK: - Mode transitions
+
+    private func configure(
+        options: AVAudioSession.CategoryOptions,
+        bufferDuration: TimeInterval
+    ) -> Bool {
         let session = AVAudioSession.sharedInstance()
-        // Preferred: duck music, pause podcasts/audiobooks while mirrored
-        // speech plays. Fall back to plainer configurations rather than
-        // ending up silent on the default (.soloAmbient) session.
-        let optionSets: [AVAudioSession.CategoryOptions] = [
-            [.duckOthers, .interruptSpokenAudioAndMixWithOthers],
-            [.duckOthers],
-            [],
-        ]
-        var failure: Error?
-        for options in optionSets {
-            do {
-                try session.setCategory(.playback, mode: .spokenAudio, options: options)
-                try session.setActive(true)
-                isActive = true
-                lastError = nil
-                return
-            } catch {
-                failure = error
+        do {
+            try session.setCategory(.playback, mode: .spokenAudio, options: options)
+            try? session.setPreferredIOBufferDuration(bufferDuration)
+            try session.setActive(true)
+            lastError = nil
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+    }
+
+    private func enterSpeaking() {
+        guard mode != .speaking else { return }
+        // Fallback ladder: never end up silent on the default session.
+        let ok = configure(
+            options: [.duckOthers, .interruptSpokenAudioAndMixWithOthers],
+            bufferDuration: speakingBufferDuration
+        )
+            || configure(options: [.duckOthers], bufferDuration: speakingBufferDuration)
+            || configure(options: [], bufferDuration: speakingBufferDuration)
+        if ok {
+            mode = .speaking
+            if keepAliveWanted {
+                startSilentEngine?()
             }
         }
-        if let failure {
-            lastError = failure.localizedDescription
+    }
+
+    private func enterIdleKeepAlive() {
+        guard keepAliveWanted else {
+            deactivate()
+            return
+        }
+        guard mode != .idleKeepAlive else { return }
+        // Mix, don't duck: idling must not squash the user's music.
+        let ok = configure(options: [.mixWithOthers], bufferDuration: idleBufferDuration)
+            || configure(options: [], bufferDuration: idleBufferDuration)
+        if ok {
+            mode = .idleKeepAlive
+            startSilentEngine?()
         }
     }
 
@@ -67,15 +126,16 @@ final class AudioSessionController {
         idleWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.isRendererIdle?() ?? true else { return }
-            self.deactivate()
+            self.enterIdleKeepAlive()
         }
         idleWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + idleGraceSeconds, execute: work)
     }
 
     private func deactivate() {
-        guard isActive else { return }
-        isActive = false
+        stopSilentEngine?()
+        guard mode != .inactive else { return }
+        mode = .inactive
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }

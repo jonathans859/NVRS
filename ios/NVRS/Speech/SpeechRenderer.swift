@@ -72,6 +72,15 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         beepPlayer.play(hz: hz, ms: ms, pan: pan)
     }
 
+    /// Background keep-alive: the beep engine renders silence while running.
+    func startAudioKeepAlive() {
+        beepPlayer.startKeepAlive()
+    }
+
+    func stopAudioKeepAlive() {
+        beepPlayer.stopKeepAlive()
+    }
+
     func cancelAll() {
         pending.removeAll()
         interruptCurrentUtterance()

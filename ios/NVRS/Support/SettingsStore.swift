@@ -32,6 +32,12 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(autoConnect, forKey: "autoConnect") }
     }
 
+    /// Keep rendering (silence) while connected so iOS doesn't suspend the
+    /// app in the background between utterances — the pocket use case.
+    @Published var keepAliveInBackground: Bool {
+        didSet { defaults.set(keepAliveInBackground, forKey: "keepAliveInBackground") }
+    }
+
     @Published var voiceIdentifier: String? {
         didSet { defaults.set(voiceIdentifier, forKey: "voiceIdentifier") }
     }
@@ -63,6 +69,7 @@ final class SettingsStore: ObservableObject {
         port = storedPort == 0 ? 6877 : storedPort
         secret = KeychainHelper.loadSecret()
         autoConnect = defaults.object(forKey: "autoConnect") as? Bool ?? true
+        keepAliveInBackground = defaults.object(forKey: "keepAliveInBackground") as? Bool ?? true
         voiceIdentifier = defaults.string(forKey: "voiceIdentifier")
         baseRate = defaults.object(forKey: "baseRate") as? Double
             ?? Double(AVSpeechUtteranceDefaultSpeechRate)
