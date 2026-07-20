@@ -3,12 +3,15 @@ name: ASC maintenance
 # Certificate housekeeping via the ASC API, on free Linux minutes.
 # - revoke-dev-certs: revokes CI-minted Apple Development certificates
 #   when the account hits Apple's cap (builds fail with "maximum number
-#   of certificates"). Spares the cached CI cert (CACHED_DEV_CERT_ID
-#   repo variable).
+#   of certificates"). Certificates are account-wide, so this reaches
+#   every repo: CACHED_DEV_CERT_IDS must list the cached cert id of
+#   EVERY repo on the account (comma separated), or a sweep run from here
+#   will delete another project's cached cert. Certs younger than an hour
+#   are skipped so a sweep can't race an in-flight build elsewhere.
 # - mint-dev-cert: mints one Development certificate from a CSR generated
 #   on the developer's machine (private key never leaves it). The cert is
-#   public material and is handed back as an artifact; afterwards store
-#   its id in the CACHED_DEV_CERT_ID repo variable.
+#   public material and is handed back as an artifact; afterwards add its
+#   id to the CACHED_DEV_CERT_IDS repo variable.
 
 on:
   workflow_dispatch:
@@ -37,7 +40,7 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-          KEEP_CERT_ID: ${{ vars.CACHED_DEV_CERT_ID }}
+          KEEP_CERT_IDS: ${{ vars.CACHED_DEV_CERT_IDS }}
           DRY_RUN: "true"
         run: python tools/asc_revoke_dev_certs.py
 
@@ -53,7 +56,7 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-          KEEP_CERT_ID: ${{ vars.CACHED_DEV_CERT_ID }}
+          KEEP_CERT_IDS: ${{ vars.CACHED_DEV_CERT_IDS }}
         run: python tools/asc_revoke_dev_certs.py
 
   mint-dev-cert:
