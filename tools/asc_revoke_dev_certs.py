@@ -119,7 +119,8 @@ def main():
         elif revoke and issued is None:
             revoke, note = False, "  (kept: issue date unknown)"
 
-        print(f"  {cert['id']}  {kind:<24} {expires:<26} {name}{note}")
+        issued_text = issued.isoformat(timespec="seconds") if issued else "issued unknown"
+        print(f"  {cert['id']}  {kind:<24} issued {issued_text:<26} {name}{note}")
         if revoke:
             victims.append(cert["id"])
 
