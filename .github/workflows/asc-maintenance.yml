@@ -16,14 +16,31 @@ on:
       action:
         description: What to do
         type: choice
-        options: [revoke-dev-certs, mint-dev-cert]
-        default: revoke-dev-certs
+        options: [list-certs, revoke-dev-certs, mint-dev-cert]
+        default: list-certs
       csr_b64:
         description: Base64 of a PEM CSR (mint-dev-cert only)
         required: false
         default: ""
 
 jobs:
+  # Read-only inventory; revokes nothing.
+  list-certs:
+    if: inputs.action == 'list-certs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install pyjwt cryptography requests
+      - name: List certificates
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          KEEP_CERT_ID: ${{ vars.CACHED_DEV_CERT_ID }}
+          DRY_RUN: "true"
+        run: python tools/asc_revoke_dev_certs.py
+
   revoke-dev-certs:
     if: inputs.action == 'revoke-dev-certs'
     runs-on: ubuntu-latest

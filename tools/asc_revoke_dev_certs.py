@@ -36,6 +36,8 @@ def main():
     # The deliberately cached CI cert (see asc_mint_dev_cert.py) is also
     # API-created; never revoke it.
     keep = os.environ.get("KEEP_CERT_ID", "").strip()
+    # Read-only inventory: prints the same listing and revokes nothing.
+    dry_run = os.environ.get("DRY_RUN", "").strip().lower() in ("1", "true", "yes")
     headers = {"Authorization": f"Bearer {make_token()}"}
     resp = requests.get(f"{BASE}/v1/certificates?limit=200", headers=headers, timeout=30)
     resp.raise_for_status()
@@ -47,9 +49,13 @@ def main():
         kind = attrs.get("certificateType")
         name = attrs.get("displayName") or ""
         kept = " (kept: cached CI cert)" if cert["id"] == keep else ""
-        print(f"  {cert['id']}  {kind:<24} {name}{kept}")
+        expires = attrs.get("expirationDate", "")
+        print(f"  {cert['id']}  {kind:<24} {expires:<26} {name}{kept}")
         if kind == "DEVELOPMENT" and name == "Created via API" and cert["id"] != keep:
             victims.append(cert["id"])
+    if dry_run:
+        print(f"DRY RUN: would revoke {len(victims)} CI-minted DEVELOPMENT certificates")
+        return
     print(f"revoking {len(victims)} CI-minted DEVELOPMENT certificates")
     failures = 0
     for cert_id in victims:
