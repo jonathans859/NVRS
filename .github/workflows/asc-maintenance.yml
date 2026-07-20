@@ -1,14 +1,31 @@
 name: ASC maintenance
 
-# Revokes CI-minted Apple Development certificates when the account hits
-# Apple's certificate cap (builds fail with "maximum number of
-# certificates"). Manual trigger; runs on free Linux minutes.
+# Certificate housekeeping via the ASC API, on free Linux minutes.
+# - revoke-dev-certs: revokes CI-minted Apple Development certificates
+#   when the account hits Apple's cap (builds fail with "maximum number
+#   of certificates"). Spares the cached CI cert (CACHED_DEV_CERT_ID
+#   repo variable).
+# - mint-dev-cert: mints one Development certificate from a CSR generated
+#   on the developer's machine (private key never leaves it). The cert is
+#   public material and is handed back as an artifact; afterwards store
+#   its id in the CACHED_DEV_CERT_ID repo variable.
 
 on:
   workflow_dispatch:
+    inputs:
+      action:
+        description: What to do
+        type: choice
+        options: [revoke-dev-certs, mint-dev-cert]
+        default: revoke-dev-certs
+      csr_b64:
+        description: Base64 of a PEM CSR (mint-dev-cert only)
+        required: false
+        default: ""
 
 jobs:
   revoke-dev-certs:
+    if: inputs.action == 'revoke-dev-certs'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -19,4 +36,29 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          KEEP_CERT_ID: ${{ vars.CACHED_DEV_CERT_ID }}
         run: python tools/asc_revoke_dev_certs.py
+
+  mint-dev-cert:
+    if: inputs.action == 'mint-dev-cert'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tools
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install pyjwt cryptography requests
+      - name: Mint Development certificate from CSR
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          CSR_B64: ${{ inputs.csr_b64 }}
+        run: python asc_mint_dev_cert.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dev-cert
+          path: |
+            tools/dev-cert.cer
+            tools/dev-cert-id.txt

@@ -33,6 +33,9 @@ def make_token():
 
 
 def main():
+    # The deliberately cached CI cert (see asc_mint_dev_cert.py) is also
+    # API-created; never revoke it.
+    keep = os.environ.get("KEEP_CERT_ID", "").strip()
     headers = {"Authorization": f"Bearer {make_token()}"}
     resp = requests.get(f"{BASE}/v1/certificates?limit=200", headers=headers, timeout=30)
     resp.raise_for_status()
@@ -43,8 +46,9 @@ def main():
         attrs = cert["attributes"]
         kind = attrs.get("certificateType")
         name = attrs.get("displayName") or ""
-        print(f"  {cert['id']}  {kind:<24} {name}")
-        if kind == "DEVELOPMENT" and name == "Created via API":
+        kept = " (kept: cached CI cert)" if cert["id"] == keep else ""
+        print(f"  {cert['id']}  {kind:<24} {name}{kept}")
+        if kind == "DEVELOPMENT" and name == "Created via API" and cert["id"] != keep:
             victims.append(cert["id"])
     print(f"revoking {len(victims)} CI-minted DEVELOPMENT certificates")
     failures = 0
