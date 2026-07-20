@@ -39,7 +39,12 @@ def main():
         json=payload,
         timeout=30,
     )
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        # Apple explains itself in the body; raise_for_status alone hides it.
+        print(f"ASC returned {resp.status_code}")
+        for err in resp.json().get("errors", [{"detail": resp.text[:500]}]):
+            print(f"  {err.get('title', '')}: {err.get('detail', '')}")
+        resp.raise_for_status()
     data = resp.json()["data"]
     attrs = data["attributes"]
     print(f"minted certificate {data['id']}")
