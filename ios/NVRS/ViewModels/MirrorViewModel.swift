@@ -209,6 +209,9 @@ final class MirrorViewModel: ObservableObject {
         // a control for a mute that no longer exists.
         isPCAudioMuted = false
         pcMuteAllowed = false
+        // The connect button carries no spoken value, and .idle produces no
+        // state event, so the announcement is the only confirmation.
+        Announce.post(String(localized: "NVRS disconnected"))
     }
 
     private func disconnectTransportOnly() {

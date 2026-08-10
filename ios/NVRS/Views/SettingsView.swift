@@ -43,6 +43,10 @@ struct SettingsView: View {
                 rateSlider
                 pitchSlider
                 volumeSlider
+                Button("Speak test phrase") {
+                    viewModel.speakTest()
+                }
+                .accessibilityHint("Speaks locally through the same audio path as mirrored speech, without the PC.")
             } header: {
                 Text("Speech")
             } footer: {

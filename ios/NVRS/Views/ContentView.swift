@@ -23,8 +23,18 @@ struct ContentView: View {
                 Section {
                     Text(viewModel.statusSentence)
                         .accessibilityAddTraits(.updatesFrequently)
-                    Toggle("Connect to PC", isOn: connectBinding)
-                        .accessibilityHint("Connects to the NVRS add-on on your PC over Tailscale.")
+                    Button(viewModel.isConnectEnabled ? "Disconnect" : "Connect") {
+                        if viewModel.isConnectEnabled {
+                            viewModel.disconnect()
+                        } else {
+                            viewModel.connect()
+                        }
+                    }
+                    .accessibilityHint(
+                        viewModel.isConnectEnabled
+                            ? "Drops the link to the NVRS add-on on your PC."
+                            : "Connects to the NVRS add-on on your PC over Tailscale."
+                    )
                     #if os(iOS)
                     Toggle("Speak on this iPhone", isOn: speakBinding)
                         .accessibilityHint("Turn off to silence mirrored speech without disconnecting. Two-finger double tap anywhere toggles this too.")
@@ -33,7 +43,7 @@ struct ContentView: View {
                         .accessibilityHint("Turn off to silence mirrored speech without disconnecting.")
                     #endif
                     if viewModel.pcMuteAllowed {
-                        Toggle("Mute PC speakers", isOn: pcMuteBinding)
+                        Toggle("Mute NVDA Speech Audio on PC", isOn: pcMuteBinding)
                             .accessibilityHint("Silences NVDA's own audio on the PC while you listen here. The PC unmutes itself when you disconnect.")
                     }
                 } header: {
@@ -52,10 +62,6 @@ struct ContentView: View {
                 }
 
                 Section {
-                    Button("Speak test phrase") {
-                        viewModel.speakTest()
-                    }
-                    .accessibilityHint("Speaks locally through the same audio path as mirrored speech, without the PC.")
                     Text("Bytes \(viewModel.bytesReceived), lines \(viewModel.linesParsed), bad \(viewModel.decodeFailures), received \(viewModel.envelopesReceived), spoken \(viewModel.utterancesStarted).")
                         .accessibilityAddTraits(.updatesFrequently)
                     if let audioError = viewModel.audioError {
@@ -76,19 +82,6 @@ struct ContentView: View {
         // Grouped is already the iOS default; on macOS it turns the bare
         // form into the familiar settings-style layout.
         .formStyle(.grouped)
-    }
-
-    private var connectBinding: Binding<Bool> {
-        Binding(
-            get: { viewModel.isConnectEnabled },
-            set: { enabled in
-                if enabled {
-                    viewModel.connect()
-                } else {
-                    viewModel.disconnect()
-                }
-            }
-        )
     }
 
     private var pcMuteBinding: Binding<Bool> {
