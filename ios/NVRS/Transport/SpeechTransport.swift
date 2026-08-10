@@ -23,4 +23,6 @@ protocol SpeechTransport: AnyObject {
     var onEvent: ((TransportEvent) -> Void)? { get set }
     func start()
     func stop()
+    /// Best effort: dropped silently when there is no live connection.
+    func send(_ message: ClientMessage)
 }

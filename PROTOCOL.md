@@ -15,7 +15,7 @@ First line from the client:
 
 The add-on closes the connection unless the secret matches (constant-time
 comparison). Immediately after a successful handshake the add-on sends the
-current `synthConfig`. The server never reads anything else from the client.
+current `synthConfig` and the current `pcMute` state.
 
 ## Server → client messages
 
@@ -93,3 +93,29 @@ Sent at connect and whenever NVDA's synth settings change. Informational for
 the iOS app in v1 (offsets are applied to the phone-local baseline), but
 carried so a future client can mirror the PC baseline exactly. All fields
 except `type` and `synth` are optional (drivers vary).
+
+```json
+{"type": "pcMute", "muted": true, "allowed": true}
+```
+State of the PC's own audio output. `muted` is true while the add-on holds
+NVDA's Windows audio session muted (speech, beeps and earcons alike — they
+all reach the client anyway). `allowed` reflects the *Mute this PC's speech
+while the app is connected* checkbox in NVDA's NVRS settings: when false the
+add-on ignores `setPCMute` and the client should not offer the control.
+
+Sent after the handshake and on every change, including changes made on the
+PC side (NVDA+shift+m). The add-on unmutes on its own when the last client
+disconnects, so a client that vanishes never leaves the PC silent.
+
+## Client → server messages
+
+Same NDJSON framing, in the other direction. Unparseable lines are ignored;
+lines longer than 4096 bytes drop the connection.
+
+```json
+{"type": "setPCMute", "muted": true}
+```
+Request muting (or unmuting) of the PC's own audio output. Omit `muted` to
+toggle whatever the add-on currently has. The add-on replies with a `pcMute`
+message in every case, including refusals (`allowed: false`) — the reply, not
+the request, is the source of truth.

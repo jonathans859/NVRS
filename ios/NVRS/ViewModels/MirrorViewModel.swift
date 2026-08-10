@@ -15,6 +15,11 @@ final class MirrorViewModel: ObservableObject {
     @Published private(set) var pcConfig: SynthConfig?
     @Published var isConnectEnabled = false
     @Published var isLocalSpeechMuted = false
+    /// The PC's own speakers, as last reported by the add-on. `pcMuteAllowed`
+    /// mirrors the opt-in checkbox in NVDA's NVRS settings — without it the
+    /// PC ignores mute requests, so the control stays hidden.
+    @Published private(set) var isPCAudioMuted = false
+    @Published private(set) var pcMuteAllowed = false
 
     // Diagnostics
     @Published private(set) var envelopesReceived = 0
@@ -200,6 +205,10 @@ final class MirrorViewModel: ObservableObject {
         renderer.cancelAll()
         audioSession.shutdown()
         connectionState = .idle
+        // Dropping the link is what unmutes the PC, so don't keep showing
+        // a control for a mute that no longer exists.
+        isPCAudioMuted = false
+        pcMuteAllowed = false
     }
 
     private func disconnectTransportOnly() {
@@ -244,6 +253,16 @@ final class MirrorViewModel: ObservableObject {
         )
     }
 
+    /// Asks the PC to mute or unmute its own speakers. The add-on echoes the
+    /// result back, which is what finally sets `isPCAudioMuted`; the
+    /// optimistic update here just keeps the toggle from snapping back
+    /// during the round trip.
+    func setPCAudioMuted(_ muted: Bool) {
+        guard pcMuteAllowed else { return }
+        isPCAudioMuted = muted
+        transport?.send(.setPCMute(muted))
+    }
+
     // MARK: - Event handling
 
     private func handle(_ event: TransportEvent) {
@@ -255,6 +274,12 @@ final class MirrorViewModel: ObservableObject {
                 Announce.post(String(localized: "NVRS connected"))
             } else if wasConnected {
                 Announce.post(String(localized: "NVRS connection lost"))
+            }
+            if state != .connected {
+                // The PC unmutes itself the moment we drop off, so the
+                // control must not linger showing a stale mute.
+                isPCAudioMuted = false
+                pcMuteAllowed = false
             }
         case .message(let message):
             handle(message)
@@ -290,6 +315,19 @@ final class MirrorViewModel: ObservableObject {
             if !isLocalSpeechMuted {
                 audioSession.speechActivity()
                 soundPlayer.play(name)
+            }
+        case .pcMute(let muted, let allowed):
+            let changed = muted != isPCAudioMuted
+            isPCAudioMuted = muted
+            pcMuteAllowed = allowed
+            if changed {
+                // Covers the PC-side shortcut too, so the phone always
+                // says which end is talking.
+                Announce.post(
+                    muted
+                        ? String(localized: "PC speech off")
+                        : String(localized: "PC speech on")
+                )
             }
         case .synthConfig(let config):
             pcConfig = config

@@ -18,6 +18,9 @@ _TAILSCALE_CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
 AUTH_TIMEOUT_SEC = 10
 CLIENT_QUEUE_SIZE = 256
 BIND_RETRY_SEC = 10
+#: Control messages from the app are tiny; anything longer is junk or an
+#: attempt to make us buffer without bound.
+MAX_CLIENT_LINE_BYTES = 4096
 
 
 def detectTailscaleIP():
@@ -50,6 +53,14 @@ class SpeechTransport:
 	#: current synthConfig greeting.
 	onListenerConnected = None
 
+	#: Called with no arguments from an arbitrary thread whenever a
+	#: listener goes away; check `listenerCount` for how many are left.
+	onListenerDisconnected = None
+
+	#: Called with one decoded dict from an arbitrary thread for every
+	#: control message a listener sends us after the handshake.
+	onClientMessage = None
+
 	def start(self):
 		raise NotImplementedError
 
@@ -62,6 +73,11 @@ class SpeechTransport:
 
 	@property
 	def isRunning(self):
+		raise NotImplementedError
+
+	@property
+	def listenerCount(self):
+		"""Number of listeners currently past the handshake."""
 		raise NotImplementedError
 
 
@@ -119,6 +135,11 @@ class TcpServerTransport(SpeechTransport):
 	@property
 	def isRunning(self):
 		return self._acceptThread is not None and self._acceptThread.is_alive()
+
+	@property
+	def listenerCount(self):
+		with self._clientsLock:
+			return len(self._clients)
 
 	def start(self):
 		self._stopping.clear()
@@ -246,6 +267,12 @@ class TcpServerTransport(SpeechTransport):
 					self._clients.remove(client)
 			client.close()
 			log.info("NVRS: client %s disconnected" % (addr[0],))
+			callback = self.onListenerDisconnected
+			if callback:
+				try:
+					callback()
+				except Exception:
+					log.error("NVRS: onListenerDisconnected failed", exc_info=True)
 
 	def _authenticate(self, sock):
 		if not self._secret:
@@ -294,12 +321,39 @@ class TcpServerTransport(SpeechTransport):
 				log.debug("NVRS: %d messages delivered to %s" % (sent, client.addr[0]))
 
 	def _readerLoop(self, client):
-		# We ignore whatever the client sends after auth, but reading is how
-		# we notice a clean disconnect promptly.
+		# Reading is how we notice a clean disconnect promptly, and how the
+		# app sends us control messages (NDJSON, same shape as our own).
+		buf = b""
 		while not client.closed.is_set():
 			try:
-				if not client.sock.recv(4096):
-					break
+				chunk = client.sock.recv(4096)
 			except OSError:
 				break
+			if not chunk:
+				break
+			buf += chunk
+			while b"\n" in buf:
+				line, buf = buf.split(b"\n", 1)
+				self._dispatchClientLine(line)
+			if len(buf) > MAX_CLIENT_LINE_BYTES:
+				log.warning("NVRS: oversized line from %s; dropping client" % (client.addr[0],))
+				break
 		client.close()
+
+	def _dispatchClientLine(self, line):
+		line = line.strip()
+		if not line:
+			return
+		try:
+			message = json.loads(line.decode("utf-8"))
+		except (ValueError, UnicodeDecodeError):
+			log.debugWarning("NVRS: unparseable line from client", exc_info=True)
+			return
+		if not isinstance(message, dict):
+			return
+		callback = self.onClientMessage
+		if callback:
+			try:
+				callback(message)
+			except Exception:
+				log.error("NVRS: onClientMessage failed", exc_info=True)

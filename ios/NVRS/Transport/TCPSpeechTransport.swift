@@ -41,6 +41,13 @@ final class TCPSpeechTransport: SpeechTransport {
         }
     }
 
+    func send(_ message: ClientMessage) {
+        queue.async {
+            guard let conn = self.connection, case .ready = conn.state else { return }
+            self.sendLine(message.jsonObject, on: conn)
+        }
+    }
+
     // MARK: - Connection lifecycle (all on `queue`)
 
     private func emit(_ event: TransportEvent) {
@@ -107,12 +114,14 @@ final class TCPSpeechTransport: SpeechTransport {
     }
 
     private func sendAuth(on conn: NWConnection) {
-        guard
-            let payload = try? JSONSerialization.data(withJSONObject: ["auth": secret]),
-            var line = String(data: payload, encoding: .utf8)
-        else { return }
-        line.append("\n")
-        conn.send(content: Data(line.utf8), completion: .contentProcessed { _ in })
+        sendLine(["auth": secret], on: conn)
+    }
+
+    /// One NDJSON line up the same socket the add-on streams down.
+    private func sendLine(_ object: [String: Any], on conn: NWConnection) {
+        guard var payload = try? JSONSerialization.data(withJSONObject: object) else { return }
+        payload.append(UInt8(ascii: "\n"))
+        conn.send(content: payload, completion: .contentProcessed { _ in })
     }
 
     private func receiveLoop(on conn: NWConnection) {

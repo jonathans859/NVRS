@@ -113,6 +113,10 @@ enum ServerMessage {
     case speech(SpeechEnvelope)
     case cancel
     case synthConfig(SynthConfig)
+    /// Whether the PC's own speakers are currently muted by the add-on,
+    /// and whether the user has allowed that at all on the PC side.
+    /// Sent at connect and on every change, so the app never guesses.
+    case pcMute(muted: Bool, allowed: Bool)
     /// A standalone beep (progress bars, add-on sounds) outside any
     /// speech sequence; played immediately, not queued behind speech.
     case beep(hz: Double, ms: Double, left: Double, right: Double)
@@ -122,8 +126,28 @@ enum ServerMessage {
     case unknown
 }
 
+/// The only thing the app sends after the handshake.
+enum ClientMessage {
+    /// `muted: nil` asks the PC to toggle whatever it has right now.
+    case setPCMute(Bool?)
+
+    var jsonObject: [String: Any] {
+        switch self {
+        case .setPCMute(let muted):
+            var object: [String: Any] = ["type": "setPCMute"]
+            if let muted { object["muted"] = muted }
+            return object
+        }
+    }
+}
+
 private struct WaveMessage: Decodable {
     let name: String?
+}
+
+private struct PCMuteMessage: Decodable {
+    let muted: Bool?
+    let allowed: Bool?
 }
 
 private struct BeepMessage: Decodable {
@@ -160,6 +184,10 @@ enum WireParser {
                 return .unknown
             }
             return .wave(name: name)
+        case "pcMute":
+            return (try? decoder.decode(PCMuteMessage.self, from: data)).map {
+                .pcMute(muted: $0.muted ?? false, allowed: $0.allowed ?? false)
+            }
         default:
             return .unknown
         }

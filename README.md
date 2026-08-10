@@ -24,8 +24,20 @@ VPS) can be added later without touching the rest.
   without one), bind address (`auto` = Tailscale interface).
 - **NVDA+Shift+N** toggles muting the stream (reassignable under Input
   Gestures → NVRS). Muting also stops the phone mid-utterance.
+- **Mute this PC's speech while the app is connected** (off by default) makes
+  the PC go quiet for as long as the app is connected, so only the phone
+  speaks. It flips the Windows audio-session mute on nvda.exe — the synth
+  still runs and every index fires as usual, so SayAll, pause and stop behave
+  exactly as they do without the add-on; only the speakers are cut. Beeps and
+  earcons go quiet too (the phone plays those as well). The PC unmutes itself
+  when the app disconnects, when NVDA exits, and when the stream mute above
+  is turned on. **NVDA+Shift+M** toggles it mid-session, as does the *Mute PC
+  speakers* switch in the app.
 - Targets NVDA 2025.1+; verified against 2026.1.1 source. Falls back to
   patching `SpeechManager.speak` if `pre_speechQueued` is missing.
+- `python tools/selftest_mute.py` drives the whole PC-mute flow (connect →
+  mute, app toggle, shortcut, disconnect → unmute) against the real
+  transport and the real Windows audio session, without NVDA installed.
 
 ## iOS app
 
@@ -33,6 +45,11 @@ Configure host (PC's Tailscale IP/MagicDNS name), port, and the same shared
 secret in Settings. Pick any installed iOS voice and baseline rate/pitch/
 volume — NVDA's prosody changes apply *relative to* that baseline. Two-finger
 double tap (magic tap) mutes/unmutes local speech anywhere in the app.
+
+A **Mute PC speakers** switch appears next to the connection status when the
+PC has that opted in (see the add-on section above); it mutes and unmutes the
+PC's own audio from here, and follows along when NVDA+Shift+M is pressed at
+the other end.
 
 Background playback uses the `audio` background mode. With "Stay awake in
 background" on (the default), a silent engine keeps rendering while

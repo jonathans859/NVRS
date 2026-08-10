@@ -24,6 +24,7 @@ import tones
 import ui
 import wx
 
+from . import audiomute
 from . import serializer
 from .transport import TcpServerTransport
 
@@ -37,6 +38,9 @@ config.conf.spec["nvrs"] = {
 	"port": "integer(default=6877, min=1, max=65535)",
 	"secret": "string(default='')",
 	"bindAddress": "string(default='auto')",
+	# Opt-in only: silencing the PC's own speakers is never done behind
+	# the user's back.
+	"muteLocalAudio": "boolean(default=false)",
 }
 
 SYNTH_POLL_SEC = 3
@@ -78,6 +82,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		_plugin = self
 		self._seq = itertools.count(1)
 		self._muted = False
+		#: True while NVDA's own audio session is muted by us.
+		self._pcMuted = False
 		self._transport = None
 		self._lastSynthConfig = None
 		self._usingOfficialHook = hasattr(speech.extensions, "pre_speechQueued")
@@ -111,6 +117,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		nvwave.decide_playWaveFile.unregister(self._onDecidePlayWaveFile)
 		synthDriverHandler.synthChanged.unregister(self._onSynthChanged)
 		self._stopTransport()
+		# Last chance to give the user their speakers back: an add-on
+		# that leaves NVDA muted on the way out is unrecoverable without
+		# sighted help.
+		if self._pcMuted:
+			self._pcMuted = False
+			audiomute.forceUnmute()
 		super().terminate()
 
 	# --- Hook wiring -----------------------------------------------------
@@ -186,6 +198,50 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def _onListenerConnected(self):
 		# Runs on a transport thread; synth state must be read on the main one.
 		wx.CallAfter(self._sendSynthConfig, True)
+		wx.CallAfter(self._onListenerConnectedMain)
+
+	def _onListenerConnectedMain(self):
+		transport = self._transport
+		if transport is None:
+			return
+		# Arm the mute on the first listener only, so a second app joining
+		# doesn't undo a mute the user has since toggled off by hand.
+		# Never while mirroring itself is muted - that would silence both ends.
+		if (
+			self._pcMuteAllowed
+			and not self._pcMuted
+			and not self._muted
+			and transport.listenerCount == 1
+		):
+			self._setPCMute(True)
+		else:
+			self._sendPCMuteState()
+
+	def _onListenerDisconnected(self):
+		wx.CallAfter(self._onListenerDisconnectedMain)
+
+	def _onListenerDisconnectedMain(self):
+		# "Until disconnection, then back to normal": the moment the last
+		# listener is gone there is nothing left carrying speech to the
+		# user, so the PC always gets its voice back.
+		transport = self._transport
+		if self._pcMuted and (transport is None or transport.listenerCount == 0):
+			self._setPCMute(False)
+
+	def _onClientMessage(self, message):
+		# Runs on a transport reader thread.
+		if message.get("type") == "setPCMute":
+			wx.CallAfter(self._handleSetPCMute, message.get("muted"))
+
+	def _handleSetPCMute(self, muted):
+		if not self._pcMuteAllowed:
+			# The app offered a control it isn't allowed to use (stale
+			# state); tell it where things really stand.
+			self._sendPCMuteState()
+			return
+		if muted is None:
+			muted = not self._pcMuted
+		self._setPCMute(bool(muted))
 
 	def _pollLoop(self):
 		# synthChanged only fires on driver switches; a light poll catches
@@ -193,6 +249,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		while not self._pollStop.wait(SYNTH_POLL_SEC):
 			if self._transport is not None:
 				wx.CallAfter(self._sendSynthConfig)
+			if self._pcMuted:
+				wx.CallAfter(audiomute.reassert, True)
 
 	def _sendSynthConfig(self, force=False):
 		transport = self._transport
@@ -208,6 +266,38 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if force or msg != self._lastSynthConfig:
 			self._lastSynthConfig = msg
 			transport.send(msg)
+
+	# --- Muting the PC's own speakers -------------------------------------
+
+	@property
+	def _pcMuteAllowed(self):
+		return bool(config.conf["nvrs"]["muteLocalAudio"]) and audiomute.isAvailable()
+
+	def _setPCMute(self, muted):
+		"""Mute/unmute NVDA's own audio output and tell the app. Main thread."""
+		muted = bool(muted) and self._pcMuteAllowed
+		if muted == self._pcMuted:
+			self._sendPCMuteState()
+			return
+		if muted:
+			if not audiomute.setMuted(True):
+				self._sendPCMuteState()
+				return
+		else:
+			# Unmuting goes through the force path: it re-acquires the
+			# session first, so a stale reference can't strand the user
+			# with silent speakers.
+			audiomute.forceUnmute()
+		self._pcMuted = muted
+		log.info("NVRS: PC speech %s" % ("muted" if muted else "unmuted"))
+		self._sendPCMuteState()
+
+	def _sendPCMuteState(self):
+		transport = self._transport
+		if transport is not None:
+			transport.send(
+				{"type": "pcMute", "muted": self._pcMuted, "allowed": self._pcMuteAllowed}
+			)
 
 	# --- Transport lifecycle ---------------------------------------------
 
@@ -226,6 +316,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			bindAddress=conf["bindAddress"],
 		)
 		self._transport.onListenerConnected = self._onListenerConnected
+		self._transport.onListenerDisconnected = self._onListenerDisconnected
+		self._transport.onClientMessage = self._onClientMessage
 		self._lastSynthConfig = None
 		self._transport.start()
 
@@ -233,6 +325,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if self._transport is not None:
 			self._transport.stop()
 			self._transport = None
+		# No transport means no listener, so the mute has nothing left to
+		# protect (this also covers "muting turned off in settings", which
+		# restarts the transport).
+		if self._pcMuted:
+			self._pcMuted = False
+			audiomute.forceUnmute()
 
 	# --- Scripts ---------------------------------------------------------
 
@@ -245,6 +343,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def script_toggleMute(self, gesture):
 		self._muted = not self._muted
 		if self._muted:
+			# Nothing carries speech to the phone any more, so silent
+			# speakers would leave the user with no output at all.
+			if self._pcMuted:
+				self._setPCMute(False)
 			transport = self._transport
 			if transport is not None:
 				# Stop anything the phone is still speaking.
@@ -254,6 +356,40 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		else:
 			# Translators: announced when NVRS streaming is unmuted.
 			ui.message(_("NVRS unmuted"))
+
+	@script(
+		# Translators: input help description for the NVRS PC-mute script.
+		description=_("Toggles muting this PC's speech while the NVRS app is connected"),
+		category="NVRS",
+		gesture="kb:NVDA+shift+m",
+	)
+	def script_togglePCMute(self, gesture):
+		if self._pcMuted:
+			# Always allow the way back out, whatever the settings say.
+			self._setPCMute(False)
+			# Translators: announced when the PC's own speech is turned back on.
+			ui.message(_("PC speech on"))
+			return
+		if not config.conf["nvrs"]["muteLocalAudio"]:
+			# Translators: announced when muting the PC is not enabled in settings.
+			ui.message(_("Muting this PC is not enabled in NVRS settings"))
+			return
+		if not audiomute.isAvailable():
+			# Translators: announced when the audio mute machinery is unavailable.
+			ui.message(_("NVRS cannot control this PC's audio"))
+			return
+		transport = self._transport
+		if transport is None or not transport.listenerCount:
+			# Muting with nothing mirroring the speech would leave the
+			# user with no output at all.
+			# Translators: announced when muting is refused because no app is connected.
+			ui.message(_("No NVRS app connected"))
+			return
+		# Say it before the speakers go quiet - it still reaches the phone,
+		# which is where the user is listening from here on.
+		# Translators: announced when the PC's own speech is muted.
+		ui.message(_("PC speech off"))
+		self._setPCMute(True)
 
 
 class NVRSSettingsPanel(SettingsPanel):
@@ -283,6 +419,27 @@ class NVRSSettingsPanel(SettingsPanel):
 			wx.TextCtrl,
 		)
 		self.bindEdit.SetValue(conf["bindAddress"])
+		self.muteLocalCheckbox = helper.addItem(
+			wx.CheckBox(
+				self,
+				# Translators: label of the mute-this-PC checkbox in NVRS settings.
+				label=_("&Mute this PC's speech while the app is connected"),
+			)
+		)
+		self.muteLocalCheckbox.SetValue(conf["muteLocalAudio"])
+		self.muteLocalCheckbox.SetToolTip(
+			wx.ToolTip(
+				# Translators: tooltip of the mute-this-PC checkbox in NVRS settings.
+				_(
+					"Silences NVDA's own audio output (speech, beeps and sounds) for as "
+					"long as the app is connected, so only the phone speaks. Audio comes "
+					"back automatically when the app disconnects. NVDA+shift+m toggles it "
+					"during a session."
+				)
+			)
+		)
+		if not audiomute.isAvailable():
+			self.muteLocalCheckbox.Disable()
 
 	def onSave(self):
 		conf = config.conf["nvrs"]
@@ -290,5 +447,8 @@ class NVRSSettingsPanel(SettingsPanel):
 		conf["port"] = self.portEdit.GetValue()
 		conf["secret"] = self.secretEdit.GetValue()
 		conf["bindAddress"] = self.bindEdit.GetValue().strip() or "auto"
+		conf["muteLocalAudio"] = self.muteLocalCheckbox.GetValue()
 		if _plugin is not None:
+			# Restarting drops the listeners, which unmutes; the mute
+			# re-arms (or doesn't) when the app reconnects.
 			_plugin._restartFromConfig()

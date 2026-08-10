@@ -32,6 +32,10 @@ struct ContentView: View {
                     Toggle("Speak on this Mac", isOn: speakBinding)
                         .accessibilityHint("Turn off to silence mirrored speech without disconnecting.")
                     #endif
+                    if viewModel.pcMuteAllowed {
+                        Toggle("Mute PC speakers", isOn: pcMuteBinding)
+                            .accessibilityHint("Silences NVDA's own audio on the PC while you listen here. The PC unmutes itself when you disconnect.")
+                    }
                 } header: {
                     Text("Status")
                 }
@@ -84,6 +88,13 @@ struct ContentView: View {
                     viewModel.disconnect()
                 }
             }
+        )
+    }
+
+    private var pcMuteBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.isPCAudioMuted },
+            set: { viewModel.setPCAudioMuted($0) }
         )
     }
 
