@@ -144,6 +144,17 @@ final class TrimmedUtterancePlayer {
         startNextRender()
     }
 
+    /// Holds playback where it is. Scheduled buffers stay scheduled and
+    /// resume from the same point, which is what makes this a pause rather
+    /// than a cancel.
+    func setPaused(_ paused: Bool) {
+        if paused {
+            player.pause()
+        } else if !isIdle {
+            player.play()
+        }
+    }
+
     /// Stops playback and everything queued, and reports whether there was
     /// anything to stop. Pending callbacks are dropped: the caller drives its
     /// own queue after an interrupt.
