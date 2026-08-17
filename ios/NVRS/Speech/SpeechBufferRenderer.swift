@@ -50,6 +50,12 @@ final class SpeechBufferRenderer {
     private var finishedAt: CFAbsoluteTime = 0
     private var attempt = 0
     private var pendingUtterance: AVSpeechUtterance?
+    /// Identifies which `write()` call a buffer belongs to. The callback
+    /// itself carries no such marker, so buffers arriving late from a write
+    /// we have already given up on would otherwise be collected as part of
+    /// the *next* utterance — which is how spelling ended up saying letters
+    /// that were never asked for.
+    private var writeToken = 0
     private var watchdog: DispatchWorkItem?
     private var completion: ((Result) -> Void)?
 
@@ -76,6 +82,8 @@ final class SpeechBufferRenderer {
 
     private func startWrite(after extraDelay: TimeInterval) {
         guard let utterance = pendingUtterance else { return }
+        writeToken += 1
+        let token = writeToken
         let sinceLastWrite = CFAbsoluteTimeGetCurrent() - finishedAt
         let delay = max(minimumWriteGap - sinceLastWrite, 0) + extraDelay
 
@@ -92,7 +100,7 @@ final class SpeechBufferRenderer {
                 // The callback arrives on an internal queue and the buffer
                 // may be recycled afterwards, so copy immediately.
                 self?.queue.async {
-                    self?.accept(buffer)
+                    self?.accept(buffer, from: token)
                 }
             }
         }
@@ -100,8 +108,10 @@ final class SpeechBufferRenderer {
 
     // MARK: - Collection (private queue)
 
-    private func accept(_ buffer: AVAudioBuffer) {
-        guard busy else { return }
+    private func accept(_ buffer: AVAudioBuffer, from token: Int) {
+        // Anything from a superseded write belongs to an utterance we are no
+        // longer rendering; collecting it would corrupt this one.
+        guard busy, token == writeToken else { return }
         guard let pcm = buffer as? AVAudioPCMBuffer else {
             result.unreadableBuffers += 1
             return

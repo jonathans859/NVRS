@@ -33,6 +33,7 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// itself off until the user changes the setting again.
     private var trimFailureStreak = 0
     private var trimDisabled = false
+    private var trimRearm: DispatchWorkItem?
     private var isPaused = false
 
     /// Baselines, updated from Settings. Read on the main thread.
@@ -64,6 +65,7 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
             trimmedPlayer.mode = pauseMode
             trimFailureStreak = 0
             trimDisabled = false
+            trimRearm?.cancel()
         }
     }
 
@@ -236,6 +238,21 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
+    /// Turning shortening off for good on a run of failures cost the user
+    /// the feature until they restarted the app — a heavy price for what is
+    /// usually a transient. Off for a minute, then it tries again.
+    private func disableTrimmingTemporarily(_ reason: String) {
+        trimDisabled = true
+        trimFailureStreak = 0
+        onTrimFailure?("\(reason) — pause shortening off for a minute")
+        trimRearm?.cancel()
+        let rearm = DispatchWorkItem { [weak self] in
+            self?.trimDisabled = false
+        }
+        trimRearm = rearm
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: rearm)
+    }
+
     /// A route change or session reconfiguration took the audio graph down
     /// with speech still scheduled on it. Put the lost utterances back at the
     /// front and carry on: nothing about this is the voice's fault, so it
@@ -256,8 +273,7 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         trimFailureStreak += 1
         if trimFailureStreak >= 3 {
             // Otherwise every utterance pays a failed render before speaking.
-            trimDisabled = true
-            onTrimFailure?("\(reason) — pause shortening disabled")
+            disableTrimmingTemporarily(reason)
         } else {
             onTrimFailure?(reason)
         }

@@ -86,6 +86,7 @@ final class OfflineRenderProbe {
         }
         let letters = remaining.count
         var audioSeconds = 0.0
+        var untrimmedSeconds = 0.0
         var renderSeconds = 0.0
         var failure: String?
         var audioResets = 0
@@ -98,6 +99,7 @@ final class OfflineRenderProbe {
         player.factor = factor
         player.onOutcome = { outcome in
             audioSeconds += outcome.playedSeconds
+            untrimmedSeconds += outcome.originalSeconds
             renderSeconds += outcome.renderSeconds
             if outcome.retried { retries += 1 }
             if let reason = outcome.failure {
@@ -115,6 +117,7 @@ final class OfflineRenderProbe {
                     voice: voice,
                     letters: letters,
                     audioSeconds: audioSeconds,
+                    untrimmedSeconds: untrimmedSeconds,
                     renderSeconds: renderSeconds,
                     wallClock: CFAbsoluteTimeGetCurrent() - startedAt,
                     mode: mode,
@@ -221,6 +224,7 @@ final class OfflineRenderProbe {
         voice: AVSpeechSynthesisVoice?,
         letters: Int,
         audioSeconds: Double,
+        untrimmedSeconds: Double,
         renderSeconds: Double,
         wallClock: Double,
         mode: PauseMode,
@@ -245,7 +249,8 @@ final class OfflineRenderProbe {
             lines.append("The audio graph was torn down \(audioResets) times mid-word; those letters were said again.")
         }
         let gaps = max(wallClock - audioSeconds, 0)
-        lines.append("Audio produced: \(ms(audioSeconds)).")
+        lines.append("Audio produced: \(ms(audioSeconds)), from \(ms(untrimmedSeconds)) before shortening.")
+        lines.append("As rendered that is \(ms(untrimmedSeconds / Double(max(letters, 1)))) per letter.")
         lines.append("Wall clock: \(ms(wallClock)), including the first render.")
         lines.append("Gaps: \(ms(gaps)) in total, \(ms(gaps / Double(max(letters - 1, 1)))) per letter boundary.")
         lines.append("Rendering cost \(ms(renderSeconds)) altogether, hidden behind playback except for the first letter.")
