@@ -34,11 +34,27 @@ struct RenderProbeView: View {
                     ForEach(viewModel.probeReport.indices, id: \.self) { index in
                         Text(viewModel.probeReport[index])
                     }
+                    Button("Copy result") {
+                        Clipboard.copy(reportText)
+                        Announce.post(String(localized: "Probe result copied"))
+                    }
+                    .accessibilityHint("Copies the whole report, plus the phrase and build number, so it can be pasted elsewhere.")
                 }
             } header: {
                 Text("Result")
             }
         }
         .navigationTitle("Pause probe")
+    }
+
+    /// Self-contained on purpose: pasted somewhere else, it still says which
+    /// build and which phrase produced these numbers.
+    private var reportText: String {
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
+        let header = [
+            "NVRS pause probe, build \(build)",
+            "Phrase: \(OfflineRenderProbe.phrase)",
+        ]
+        return (header + viewModel.probeReport).joined(separator: "\n")
     }
 }
