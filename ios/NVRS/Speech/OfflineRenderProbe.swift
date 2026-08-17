@@ -89,6 +89,8 @@ final class OfflineRenderProbe {
         var renderSeconds = 0.0
         var failure: String?
         var audioResets = 0
+        var renderFailures = 0
+        var retries = 0
         let startedAt = CFAbsoluteTimeGetCurrent()
         var finished = false
 
@@ -97,8 +99,10 @@ final class OfflineRenderProbe {
         player.onOutcome = { outcome in
             audioSeconds += outcome.playedSeconds
             renderSeconds += outcome.renderSeconds
-            if let reason = outcome.failure, failure == nil {
-                failure = reason
+            if outcome.retried { retries += 1 }
+            if let reason = outcome.failure {
+                renderFailures += 1
+                if failure == nil { failure = reason }
             }
         }
         // Captures only locals on purpose: referencing the player here would
@@ -116,6 +120,8 @@ final class OfflineRenderProbe {
                     mode: mode,
                     factor: factor,
                     audioResets: audioResets,
+                    renderFailures: renderFailures,
+                    retries: retries,
                     failure: failure
                 )
             )
@@ -140,11 +146,22 @@ final class OfflineRenderProbe {
                 self.player.enqueue(remaining.removeFirst(), modeOverride: mode)
             }
         }
-        // A failed render stops the run rather than hanging the report.
-        player.onFailure = { reason, _ in
+        // Say the letters again rather than reporting a word with holes in
+        // it — the live path recovers the same way, so the measurement should
+        // include the recovery. Bounded, so a voice that always fails ends the
+        // run instead of looping.
+        player.onFailure = { [weak self] reason, lost in
+            guard let self, !finished else { return }
             if failure == nil { failure = reason }
-            remaining.removeAll()
-            finish()
+            guard renderFailures <= letters else {
+                remaining.removeAll()
+                finish()
+                return
+            }
+            remaining.insert(contentsOf: lost, at: 0)
+            while !remaining.isEmpty, self.player.canAcceptMore {
+                self.player.enqueue(remaining.removeFirst(), modeOverride: mode)
+            }
         }
         while !remaining.isEmpty, player.canAcceptMore {
             player.enqueue(remaining.removeFirst(), modeOverride: mode)
@@ -209,6 +226,8 @@ final class OfflineRenderProbe {
         mode: PauseMode,
         factor: Double,
         audioResets: Int,
+        renderFailures: Int,
+        retries: Int,
         failure: String?
     ) -> Report {
         var lines = [
@@ -216,8 +235,11 @@ final class OfflineRenderProbe {
             "Voice: \(voice?.name ?? "system default").",
             "Mode: \(mode.label), keeping \(Int(factor * 100)) percent.",
         ]
-        if let failure {
-            lines.append("At least one render failed: \(failure).")
+        if renderFailures > 0 {
+            lines.append("Renders that came back empty: \(renderFailures) (\(failure ?? "unknown")). Those letters were said again.")
+        }
+        if retries > 0 {
+            lines.append("Renders that needed a second attempt: \(retries).")
         }
         if audioResets > 0 {
             lines.append("The audio graph was torn down \(audioResets) times mid-word; those letters were said again.")

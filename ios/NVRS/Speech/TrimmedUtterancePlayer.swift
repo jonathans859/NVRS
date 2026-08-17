@@ -25,6 +25,7 @@ final class TrimmedUtterancePlayer {
         var bufferCount = 0
         var sampleRate: Double = 0
         var channels: AVAudioChannelCount = 0
+        var retried = false
         var analysis = SilenceTrimmer.Analysis()
     }
 
@@ -126,7 +127,11 @@ final class TrimmedUtterancePlayer {
     }
 
     var canAcceptMore: Bool {
-        scheduled + queued.count + (rendering ? 1 : 0) < maxInFlight
+        // Nothing new while a failure is waiting to be handed back: the
+        // caller re-queues those utterances at the front, and letting later
+        // ones in first would speak them out of order.
+        failureReason == nil
+            && scheduled + queued.count + (rendering ? 1 : 0) < maxInFlight
             && scheduledSeconds < maxScheduledSeconds
     }
 
@@ -188,6 +193,7 @@ final class TrimmedUtterancePlayer {
         var outcome = Outcome()
         outcome.renderSeconds = result.renderSeconds
         outcome.bufferCount = result.bufferCount
+        outcome.retried = result.retried
 
         guard let rendered = result.buffer, result.failure == nil else {
             outcome.failure = result.failure ?? "voice returned no audio"

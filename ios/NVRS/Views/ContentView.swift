@@ -23,6 +23,10 @@ struct ContentView: View {
                 Section {
                     Text(viewModel.statusSentence)
                         .accessibilityAddTraits(.updatesFrequently)
+                    if viewModel.isSpeechPaused {
+                        Text("Speech paused on the PC.")
+                            .accessibilityAddTraits(.updatesFrequently)
+                    }
                     Button(viewModel.isConnectEnabled ? "Disconnect" : "Connect") {
                         if viewModel.isConnectEnabled {
                             viewModel.disconnect()

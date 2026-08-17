@@ -123,6 +123,9 @@ enum ServerMessage {
     /// A named earcon (browseMode, focusMode, error, …); the app plays
     /// its bundled copy if it has one.
     case wave(name: String)
+    /// NVDA's shift-key pause/resume. It reaches the PC's synth driver
+    /// rather than the speech sequence, so it travels as its own message.
+    case pause(Bool)
     case unknown
 }
 
@@ -143,6 +146,10 @@ enum ClientMessage {
 
 private struct WaveMessage: Decodable {
     let name: String?
+}
+
+private struct PauseMessage: Decodable {
+    let paused: Bool?
 }
 
 private struct PCMuteMessage: Decodable {
@@ -184,6 +191,8 @@ enum WireParser {
                 return .unknown
             }
             return .wave(name: name)
+        case "pause":
+            return .pause((try? decoder.decode(PauseMessage.self, from: data))?.paused ?? true)
         case "pcMute":
             return (try? decoder.decode(PCMuteMessage.self, from: data)).map {
                 .pcMute(muted: $0.muted ?? false, allowed: $0.allowed ?? false)

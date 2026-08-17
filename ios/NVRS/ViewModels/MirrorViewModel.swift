@@ -20,6 +20,8 @@ final class MirrorViewModel: ObservableObject {
     /// PC ignores mute requests, so the control stays hidden.
     @Published private(set) var isPCAudioMuted = false
     @Published private(set) var pcMuteAllowed = false
+    /// NVDA's speech is paused (shift key on the PC).
+    @Published private(set) var isSpeechPaused = false
 
     // Diagnostics
     @Published private(set) var envelopesReceived = 0
@@ -378,6 +380,7 @@ final class MirrorViewModel: ObservableObject {
                 Announce.post(String(localized: "NVRS connection lost"))
             }
             if state != .connected {
+                isSpeechPaused = false
                 // The PC unmutes itself the moment we drop off, so the
                 // control must not linger showing a stale mute.
                 isPCAudioMuted = false
@@ -407,7 +410,14 @@ final class MirrorViewModel: ObservableObject {
                 renderer.enqueue(envelope)
             }
         case .cancel:
+            isSpeechPaused = false
             renderer.cancelAll()
+        case .pause(let paused):
+            // Mirrors NVDA's shift key. Shown in the UI because a phone that
+            // has gone quiet on purpose looks exactly like one that has
+            // broken.
+            isSpeechPaused = paused
+            renderer.setPaused(paused)
         case .beep(let hz, let ms, let left, let right):
             if !isLocalSpeechMuted {
                 audioSession.speechActivity()

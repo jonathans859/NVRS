@@ -88,6 +88,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		self._lastSynthConfig = None
 		self._usingOfficialHook = hasattr(speech.extensions, "pre_speechQueued")
 		self._origManagerSpeak = None
+		#: post_speechPaused, when this NVDA has it; None otherwise.
+		self._pausedHook = None
 		self._registerSpeechHooks()
 		tones.decide_beep.register(self._onDecideBeep)
 		nvwave.decide_playWaveFile.register(self._onDecidePlayWaveFile)
@@ -113,6 +115,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		elif self._origManagerSpeak is not None:
 			speech.manager.SpeechManager.speak = self._origManagerSpeak
 		speech.extensions.speechCanceled.unregister(self._onSpeechCanceled)
+		if self._pausedHook is not None:
+			self._pausedHook.unregister(self._onSpeechPaused)
 		tones.decide_beep.unregister(self._onDecideBeep)
 		nvwave.decide_playWaveFile.unregister(self._onDecidePlayWaveFile)
 		synthDriverHandler.synthChanged.unregister(self._onSynthChanged)
@@ -149,6 +153,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			speech.manager.SpeechManager.speak = patchedSpeak
 			log.info("NVRS: pre_speechQueued unavailable; patched SpeechManager.speak")
 		speech.extensions.speechCanceled.register(self._onSpeechCanceled)
+		# Shift pauses and resumes NVDA's speech. It reaches the synth
+		# driver, never the speech sequence, so mirroring it needs its own
+		# hook or the phone keeps talking through a pause.
+		paused = getattr(speech.extensions, "post_speechPaused", None)
+		if paused is not None:
+			paused.register(self._onSpeechPaused)
+			self._pausedHook = paused
 
 	# --- Event handlers --------------------------------------------------
 
@@ -165,6 +176,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		transport = self._transport
 		if transport is not None and not self._muted:
 			transport.send({"type": "cancel"})
+
+	def _onSpeechPaused(self, switch=False, **kwargs):
+		transport = self._transport
+		if transport is not None and not self._muted:
+			transport.send({"type": "pause", "paused": bool(switch)})
 
 	def _onDecideBeep(
 		self, hz=None, length=None, left=50, right=50, isSpeechBeepCommand=False, **kwargs

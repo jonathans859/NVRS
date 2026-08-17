@@ -78,6 +78,17 @@ travel as envelope items instead (`isSpeechBeepCommand` beeps are not
 forwarded here, avoiding doubles).
 
 ```json
+{"type": "pause", "paused": true}
+```
+NVDA's speech was paused or resumed (the shift key; captured via
+`speech.extensions.post_speechPaused`). It reaches NVDA's *synth driver*
+rather than the speech sequence, so it cannot ride along in an envelope and
+travels as its own message. The client holds playback where it is and
+resumes from the same point — a pause, not a cancel. A `cancel` clears the
+paused state, mirroring NVDA, which does the same. Older NVDA builds without
+the extension point simply never send it.
+
+```json
 {"type": "wave", "name": "focusMode"}
 ```
 The PC played a wave-file earcon (captured via `nvwave.decide_playWaveFile`;

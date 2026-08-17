@@ -18,6 +18,8 @@ final class SpeechBufferRenderer {
         var unreadableBuffers = 0
         var renderSeconds: Double = 0
         var timedOut = false
+        /// The first attempt came back empty and we asked again.
+        var retried = false
 
         var failure: String? {
             if timedOut { return "render timed out" }
@@ -30,6 +32,14 @@ final class SpeechBufferRenderer {
     /// live mirror; the caller falls back to `speak()` instead of waiting.
     var timeout: TimeInterval = 3.0
 
+    /// Back-to-back `write()` calls on one synthesizer return nothing at all
+    /// for the second one often enough to matter — measured while spelling,
+    /// where utterances are one character and follow each other as fast as
+    /// they render. A short breather between writes, and one retry when a
+    /// render still comes back empty, is what keeps letters from vanishing.
+    private let minimumWriteGap: TimeInterval = 0.03
+    private let retryDelay: TimeInterval = 0.08
+
     private let queue = DispatchQueue(label: "com.jonathan859.nvrs.bufferrender")
     private let synthesizer = AVSpeechSynthesizer()
 
@@ -37,6 +47,9 @@ final class SpeechBufferRenderer {
     private var buffers: [AVAudioPCMBuffer] = []
     private var result = Result()
     private var startedAt: CFAbsoluteTime = 0
+    private var finishedAt: CFAbsoluteTime = 0
+    private var attempt = 0
+    private var pendingUtterance: AVSpeechUtterance?
     private var watchdog: DispatchWorkItem?
     private var completion: ((Result) -> Void)?
 
@@ -54,23 +67,32 @@ final class SpeechBufferRenderer {
             self.buffers = []
             self.result = Result()
             self.completion = completion
+            self.attempt = 0
+            self.pendingUtterance = utterance
             self.startedAt = CFAbsoluteTimeGetCurrent()
+            self.startWrite(after: 0)
+        }
+    }
 
-            let watchdog = DispatchWorkItem { [weak self] in
-                self?.finish(timedOut: true)
-            }
-            self.watchdog = watchdog
-            self.queue.asyncAfter(deadline: .now() + self.timeout, execute: watchdog)
+    private func startWrite(after extraDelay: TimeInterval) {
+        guard let utterance = pendingUtterance else { return }
+        let sinceLastWrite = CFAbsoluteTimeGetCurrent() - finishedAt
+        let delay = max(minimumWriteGap - sinceLastWrite, 0) + extraDelay
 
-            // Drive the synthesizer from the main thread, like the ordinary
-            // speak() path — write-versus-speak should be the only difference.
-            DispatchQueue.main.async {
-                self.synthesizer.write(utterance) { [weak self] buffer in
-                    // The callback arrives on an internal queue and the
-                    // buffer may be recycled afterwards, so copy immediately.
-                    self?.queue.async {
-                        self?.accept(buffer)
-                    }
+        let watchdog = DispatchWorkItem { [weak self] in
+            self?.finish(timedOut: true)
+        }
+        self.watchdog = watchdog
+        queue.asyncAfter(deadline: .now() + delay + timeout, execute: watchdog)
+
+        // Drive the synthesizer from the main thread, like the ordinary
+        // speak() path — write-versus-speak should be the only difference.
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            self.synthesizer.write(utterance) { [weak self] buffer in
+                // The callback arrives on an internal queue and the buffer
+                // may be recycled afterwards, so copy immediately.
+                self?.queue.async {
+                    self?.accept(buffer)
                 }
             }
         }
@@ -100,9 +122,22 @@ final class SpeechBufferRenderer {
 
     private func finish(timedOut: Bool) {
         guard busy else { return }
-        busy = false
         watchdog?.cancel()
         watchdog = nil
+        finishedAt = CFAbsoluteTimeGetCurrent()
+
+        // An empty result is usually the synthesizer not being ready yet
+        // rather than a voice that cannot render; ask once more before
+        // giving up, because giving up costs a spoken letter.
+        if buffers.isEmpty, !timedOut, attempt == 0 {
+            attempt = 1
+            result.retried = true
+            startWrite(after: retryDelay)
+            return
+        }
+
+        busy = false
+        pendingUtterance = nil
         result.renderSeconds = CFAbsoluteTimeGetCurrent() - startedAt
         result.timedOut = timedOut
         // A timeout means we may be holding half an utterance; speaking half

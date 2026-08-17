@@ -33,6 +33,7 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// itself off until the user changes the setting again.
     private var trimFailureStreak = 0
     private var trimDisabled = false
+    private var isPaused = false
 
     /// Baselines, updated from Settings. Read on the main thread.
     var baseVoiceIdentifier: String?
@@ -136,7 +137,30 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         beepPlayer.stopKeepAlive()
     }
 
+    /// NVDA's shift-key pause, mirrored. Both paths can hold and resume:
+    /// the system synthesizer has its own pause, and our player node keeps
+    /// its scheduled audio and picks up where it stopped.
+    func setPaused(_ paused: Bool) {
+        isPaused = paused
+        trimmedPlayer.setPaused(paused)
+        if paused {
+            if synthesizer.isSpeaking, !synthesizer.isPaused {
+                synthesizer.pauseSpeaking(at: .word)
+            }
+        } else {
+            if synthesizer.isPaused {
+                synthesizer.continueSpeaking()
+            }
+            speakNextIfIdle()
+        }
+    }
+
     func cancelAll() {
+        // NVDA clears its own pause when speech is cancelled, so a stale
+        // pause must never outlive the queue it was holding.
+        if isPaused {
+            setPaused(false)
+        }
         pending.removeAll()
         interruptCurrentUtterance()
         if isIdle {
@@ -162,6 +186,7 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     private func speakNextIfIdle() {
+        guard !isPaused else { return }
         if trimmingActive {
             pumpTrimmed()
             return
@@ -190,7 +215,7 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// one-utterance-per-character spelling used to pay at every letter.
     private func pumpTrimmed() {
         // A fallback utterance on the system path owns the audio until done.
-        guard !speaking else { return }
+        guard !speaking, !isPaused else { return }
         while let step = pending.first {
             switch step {
             case .utterance(let utterance):
