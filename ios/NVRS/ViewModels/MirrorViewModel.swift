@@ -28,9 +28,13 @@ final class MirrorViewModel: ObservableObject {
     @Published private(set) var bytesReceived = 0
     @Published private(set) var linesParsed = 0
     @Published private(set) var decodeFailures = 0
+    /// Pause-shortening spike: last offline-render report, newest first line.
+    @Published private(set) var probeReport: [String] = []
+    @Published private(set) var isProbing = false
 
     let settings: SettingsStore
     private let renderer = SpeechRenderer()
+    private let renderProbe = OfflineRenderProbe()
     private let soundPlayer = SoundPlayer()
     private let audioSession = AudioSessionController()
     private let filterEngine = NotificationFilterEngine()
@@ -241,6 +245,38 @@ final class MirrorViewModel: ObservableObject {
             items: [.text(phrase)]
         )
         renderer.enqueue(envelope)
+    }
+
+    /// Pause-shortening spike: renders the probe phrase with the voice that
+    /// mirrored speech would use, through `write(_:toBufferCallback:)`
+    /// instead of `speak()`. `play` additionally schedules the result on our
+    /// own engine, unmodified — the two halves of the question ("does this
+    /// voice render offline" and "can we play what it gives us") stay
+    /// separately answerable.
+    func runRenderProbe(play: Bool) {
+        guard !isProbing else { return }
+        isProbing = true
+        probeReport = [String(localized: "Rendering…")]
+        if play {
+            audioSession.speechActivity()
+            audioError = audioSession.lastError
+        }
+        let voice = effectiveVoiceIdentifier().flatMap { AVSpeechSynthesisVoice(identifier: $0) }
+        renderProbe.run(
+            phrase: OfflineRenderProbe.phrase,
+            voice: voice,
+            rate: effectiveRate(),
+            pitch: Float(settings.basePitch),
+            volume: Float(settings.baseVolume),
+            play: play
+        ) { [weak self] report in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isProbing = false
+                self.probeReport = report.lines
+                Announce.post(report.headline)
+            }
+        }
     }
 
     /// Magic-tap target: mute/unmute local playback without dropping the link.

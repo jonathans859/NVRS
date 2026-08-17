@@ -47,6 +47,10 @@ struct SettingsView: View {
                     viewModel.speakTest()
                 }
                 .accessibilityHint("Speaks locally through the same audio path as mirrored speech, without the PC.")
+                NavigationLink("Pause probe") {
+                    RenderProbeView()
+                }
+                .accessibilityHint("Experiment towards shortening Eloquence pauses on this device.")
             } header: {
                 Text("Speech")
             } footer: {
