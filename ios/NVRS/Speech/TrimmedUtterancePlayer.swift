@@ -59,6 +59,14 @@ final class TrimmedUtterancePlayer {
     /// feeding never stalls waiting for the whole batch to drain.
     var onProgress: (() -> Void)?
 
+    /// The audio graph was torn down under us (a route change, the session
+    /// reconfiguring) and everything scheduled died with it. Carries the
+    /// utterances that were lost, in order, so the caller can say them again.
+    /// Not a failure of the voice, so it must not count towards disabling
+    /// shortening — losing letters out of a spelled word is what this
+    /// prevents.
+    var onAudioReset: (([AVSpeechUtterance]) -> Void)?
+
     private struct Job {
         var utterance: AVSpeechUtterance
         var mode: PauseMode
@@ -70,7 +78,12 @@ final class TrimmedUtterancePlayer {
     private let player = AVAudioPlayerNode()
 
     private var queued: [Job] = []
+    /// Handed to the audio node and not yet finished playing, oldest first.
+    private var inFlight: [AVSpeechUtterance] = []
     private var rendering = false
+    /// The one being rendered right now: in neither queue, so it has to be
+    /// tracked separately or a reset would drop exactly one utterance.
+    private var renderingJob: Job?
     private var scheduled = 0
     private var scheduledSeconds = 0.0
     private var failureReason: String?
@@ -82,6 +95,30 @@ final class TrimmedUtterancePlayer {
 
     init(host: AudioEngineHost) {
         self.host = host
+        host.onAudioReset { [weak self] in
+            self?.recoverFromAudioReset()
+        }
+    }
+
+    /// Everything scheduled is gone. Reset the counters — the completion
+    /// handlers for those buffers will never arrive — and hand the lost
+    /// utterances back. The one that was mid-playback goes back too: a
+    /// repeated letter is a blemish, a missing letter is a bug.
+    private func recoverFromAudioReset() {
+        let lost = inFlight
+            + [renderingJob?.utterance].compactMap { $0 }
+            + queued.map(\.utterance)
+        guard !lost.isEmpty else { return }
+        generation += 1
+        player.stop()
+        inFlight.removeAll()
+        renderingJob = nil
+        queued.removeAll()
+        scheduled = 0
+        scheduledSeconds = 0
+        failureReason = nil
+        returned.removeAll()
+        onAudioReset?(lost)
     }
 
     var isIdle: Bool {
@@ -113,6 +150,8 @@ final class TrimmedUtterancePlayer {
         // completion resets it. Clearing it here would start a second render
         // while the first still holds the synthesizer.
         queued.removeAll()
+        inFlight.removeAll()
+        renderingJob = nil
         scheduled = 0
         scheduledSeconds = 0
         failureReason = nil
@@ -127,11 +166,13 @@ final class TrimmedUtterancePlayer {
         guard !rendering, !queued.isEmpty else { return }
         rendering = true
         let job = queued.removeFirst()
+        renderingJob = job
         let token = generation
         let delay = job.utterance.preUtteranceDelay
         renderer.render(job.utterance.renderCopy()) { [weak self] result in
             guard let self else { return }
             self.rendering = false
+            self.renderingJob = nil
             defer { self.startNextRender() }
             guard token == self.generation else { return }
             self.handle(result, job: job, delay: delay, token: token)
@@ -186,16 +227,21 @@ final class TrimmedUtterancePlayer {
         }
         scheduled += 1
         scheduledSeconds += outcome.playedSeconds
+        inFlight.append(job.utterance)
         let playedSeconds = outcome.playedSeconds
         player.scheduleBuffer(audio, at: nil, options: [], completionCallbackType: .dataPlayedBack) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self, token == self.generation else { return }
                 self.scheduled -= 1
                 self.scheduledSeconds = max(self.scheduledSeconds - playedSeconds, 0)
+                if !self.inFlight.isEmpty {
+                    self.inFlight.removeFirst()
+                }
                 self.progress()
             }
         }
         player.play()
+        watchStall(for: job.utterance, token: token)
         onStarted?()
         onOutcome?(outcome)
     }
@@ -222,6 +268,20 @@ final class TrimmedUtterancePlayer {
             return
         }
         onProgress?()
+    }
+
+    /// A buffer whose completion never arrives would sit in the queue for
+    /// ever and take the rest of the word with it — which is how letters go
+    /// missing from spelling. If it has not played by the time everything
+    /// queued ahead of it could have played twice over, treat it as lost and
+    /// say it again.
+    private func watchStall(for utterance: AVSpeechUtterance, token: Int) {
+        let deadline = scheduledSeconds + 3.0
+        DispatchQueue.main.asyncAfter(deadline: .now() + deadline) { [weak self] in
+            guard let self, token == self.generation else { return }
+            guard self.inFlight.contains(where: { $0 === utterance }) else { return }
+            self.recoverFromAudioReset()
+        }
     }
 
     /// Returns a failure description, or nil when the engine is ready.

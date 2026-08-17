@@ -31,6 +31,9 @@ final class MirrorViewModel: ObservableObject {
     /// Pause-shortening spike: last offline-render report, newest first line.
     @Published private(set) var probeReport: [String] = []
     @Published private(set) var isProbing = false
+    /// Times the audio graph was torn down mid-speech and the speech it was
+    /// playing had to be queued again.
+    @Published private(set) var audioResets = 0
     /// Utterances that fell back to plain speak() because the render failed.
     @Published private(set) var trimFallbacks = 0
     @Published private(set) var lastTrimFailure: String?
@@ -78,6 +81,9 @@ final class MirrorViewModel: ObservableObject {
         renderer.onTrimFailure = { [weak self] reason in
             self?.trimFallbacks += 1
             self?.lastTrimFailure = reason
+        }
+        renderer.onAudioReset = { [weak self] in
+            self?.audioResets += 1
         }
         // A connection that died while the app couldn't run shows up as
         // failed only after backoff; reconnect right away instead when the

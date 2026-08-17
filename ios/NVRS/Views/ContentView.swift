@@ -67,6 +67,9 @@ struct ContentView: View {
                     if let audioError = viewModel.audioError {
                         Text("Audio session error: \(audioError)")
                     }
+                    if viewModel.audioResets > 0 {
+                        Text("Audio graph reset \(viewModel.audioResets) times; the speech it was playing was queued again.")
+                    }
                     if viewModel.trimFallbacks > 0 {
                         Text("Pause shortening fell back \(viewModel.trimFallbacks) times. Last reason: \(viewModel.lastTrimFailure ?? "unknown").")
                     }

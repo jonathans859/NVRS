@@ -52,6 +52,10 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// still spoken — this is for the diagnostics line, not for the user.
     var onTrimFailure: ((String) -> Void)?
 
+    /// The audio graph was torn down mid-speech and what it was playing had
+    /// to be queued again. Diagnostics only; recovery is automatic.
+    var onAudioReset: (() -> Void)?
+
     /// Pause shortening. `.off` keeps the plain `speak()` path, so the
     /// default behaviour is byte-for-byte what it was.
     var pauseMode: PauseMode = .off {
@@ -92,13 +96,8 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         trimmedPlayer.onFailure = { [weak self] reason, returned in
             self?.handleTrimFailure(reason, returned: returned)
         }
-        host.onConfigurationChange = { [weak self] in
-            guard let self else { return }
-            // Whatever was scheduled died with the old graph; drop it and
-            // carry on with the queue rather than waiting for callbacks that
-            // will never come.
-            self.trimmedPlayer.stopAll()
-            self.speakNextIfIdle()
+        trimmedPlayer.onAudioReset = { [weak self] lost in
+            self?.recoverFromAudioReset(lost)
         }
     }
 
@@ -210,6 +209,18 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         if isIdle {
             onActivity?(false)
         }
+    }
+
+    /// A route change or session reconfiguration took the audio graph down
+    /// with speech still scheduled on it. Put the lost utterances back at the
+    /// front and carry on: nothing about this is the voice's fault, so it
+    /// must not count towards disabling shortening.
+    private func recoverFromAudioReset(_ lost: [AVSpeechUtterance]) {
+        for utterance in lost.reversed() {
+            pending.insert(.utterance(utterance), at: 0)
+        }
+        onAudioReset?()
+        speakNextIfIdle()
     }
 
     /// A render failed. The utterances that never reached the audio node are

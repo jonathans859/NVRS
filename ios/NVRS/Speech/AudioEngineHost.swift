@@ -21,10 +21,14 @@ final class AudioEngineHost {
 
     var isRunning: Bool { engine.isRunning }
 
-    /// The graph was rebuilt under us: anything scheduled is gone, so the
-    /// owner has to resynchronise rather than wait for callbacks that will
-    /// never arrive.
-    var onConfigurationChange: (() -> Void)?
+    private var resetHandlers: [() -> Void] = []
+
+    /// Called only when the engine actually went down and took its scheduled
+    /// audio with it — so a handler firing means audio was lost and has to be
+    /// played again, not merely that something in the session changed.
+    func onAudioReset(_ handler: @escaping () -> Void) {
+        resetHandlers.append(handler)
+    }
 
     init() {
         // A route change (headphones, a call, the session reconfiguring its
@@ -39,15 +43,19 @@ final class AudioEngineHost {
         }
     }
 
+    /// The engine stops *itself* on a configuration change, so a still-running
+    /// engine means the graph survived and nothing needs disturbing. Only when
+    /// it went down do we rebuild — and only then did anyone lose audio.
     private func rebuild() {
+        guard wantsRunning, !engine.isRunning else { return }
         for node in nodes {
             guard let format = connected[ObjectIdentifier(node)] else { continue }
             engine.connect(node, to: engine.mainMixerNode, format: format)
         }
-        if wantsRunning {
-            _ = start()
+        _ = start()
+        for handler in resetHandlers {
+            handler()
         }
-        onConfigurationChange?()
     }
 
     /// Attaches the node once and connects it, reconnecting only when the

@@ -54,6 +54,7 @@ final class OfflineRenderProbe {
         player.onProgress = nil
         // The failure already reaches the report through onOutcome.
         player.onFailure = nil
+        player.onAudioReset = nil
         player.onOutcome = { outcome in
             completion(Self.report(for: outcome, voice: voice, mode: mode, factor: factor, silent: silent))
         }
@@ -87,6 +88,7 @@ final class OfflineRenderProbe {
         var audioSeconds = 0.0
         var renderSeconds = 0.0
         var failure: String?
+        var audioResets = 0
         let startedAt = CFAbsoluteTimeGetCurrent()
         var finished = false
 
@@ -113,6 +115,7 @@ final class OfflineRenderProbe {
                     wallClock: CFAbsoluteTimeGetCurrent() - startedAt,
                     mode: mode,
                     factor: factor,
+                    audioResets: audioResets,
                     failure: failure
                 )
             )
@@ -125,6 +128,17 @@ final class OfflineRenderProbe {
             }
             guard remaining.isEmpty, self.player.isIdle else { return }
             finish()
+        }
+        // The graph went down mid-word: say the lost letters again rather
+        // than reporting a word with holes in it. Counted, because how often
+        // this happens is exactly what we need to know.
+        player.onAudioReset = { [weak self] lost in
+            guard let self, !finished else { return }
+            audioResets += 1
+            remaining.insert(contentsOf: lost, at: 0)
+            while !remaining.isEmpty, self.player.canAcceptMore {
+                self.player.enqueue(remaining.removeFirst(), modeOverride: mode)
+            }
         }
         // A failed render stops the run rather than hanging the report.
         player.onFailure = { reason, _ in
@@ -194,6 +208,7 @@ final class OfflineRenderProbe {
         wallClock: Double,
         mode: PauseMode,
         factor: Double,
+        audioResets: Int,
         failure: String?
     ) -> Report {
         var lines = [
@@ -203,6 +218,9 @@ final class OfflineRenderProbe {
         ]
         if let failure {
             lines.append("At least one render failed: \(failure).")
+        }
+        if audioResets > 0 {
+            lines.append("The audio graph was torn down \(audioResets) times mid-word; those letters were said again.")
         }
         let gaps = max(wallClock - audioSeconds, 0)
         lines.append("Audio produced: \(ms(audioSeconds)).")
