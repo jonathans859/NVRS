@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 
 /// Speaks utterances the long way round: render each to PCM, shorten the
-/// silence, play the result on our own engine. That is the only route on
+/// silence, play the result on the app's shared engine. That is the only route on
 /// iOS to Eloquence-style pause shortening — Apple's voices expose no pause
 /// control, and every attempt to fake one by editing the text failed.
 ///
@@ -12,9 +12,10 @@ import Foundation
 /// one utterance per character, and the old play-wait-play pump paid a gap at
 /// every letter.
 ///
-/// Main-thread only; every callback is delivered on main. It runs its own
-/// `AVAudioEngine` rather than sharing `BeepPlayer`'s, so the field-tested
-/// keep-alive path stays untouched while this is young.
+/// Main-thread only; every callback is delivered on main. It shares one
+/// `AudioEngineHost` with the beep player: two engines on one session
+/// crackled and dropped audio, and stopping an engine between bursts cost the
+/// start of the next one.
 final class TrimmedUtterancePlayer {
     struct Outcome {
         var failure: String?
@@ -27,10 +28,14 @@ final class TrimmedUtterancePlayer {
         var analysis = SilenceTrimmer.Analysis()
     }
 
-    /// One utterance ahead of the one being played. A letter is 200–300 ms of
-    /// audio and renders in tens of ms, so a deeper queue would buy nothing
-    /// and would only widen what an interrupt has to throw away.
-    private let lookAhead = 2
+    /// How far ahead of playback we are willing to run. Depth one was too
+    /// tight: with spelling, one letter is only ~250 ms of audio, so a render
+    /// that ran a little long left the node with nothing queued — audible as
+    /// crackle and as gaps of uneven length. Two limits, whichever binds
+    /// first: a count (for many short utterances) and a duration (so a
+    /// say-all of long ones doesn't render half a minute ahead).
+    private let maxInFlight = 8
+    private let maxScheduledSeconds = 2.0
 
     var mode: PauseMode = .off
     var factor: Double = 0.3
@@ -61,14 +66,13 @@ final class TrimmedUtterancePlayer {
     }
 
     private let renderer = SpeechBufferRenderer()
-    private let engine = AVAudioEngine()
+    private let host: AudioEngineHost
     private let player = AVAudioPlayerNode()
-    private var attached = false
-    private var connectedFormat: AVAudioFormat?
 
     private var queued: [Job] = []
     private var rendering = false
     private var scheduled = 0
+    private var scheduledSeconds = 0.0
     private var failureReason: String?
     private var returned: [AVSpeechUtterance] = []
 
@@ -76,13 +80,17 @@ final class TrimmedUtterancePlayer {
     /// which is what makes the checks race-free.
     private var generation = 0
 
+    init(host: AudioEngineHost) {
+        self.host = host
+    }
+
     var isIdle: Bool {
         !rendering && queued.isEmpty && scheduled == 0
     }
 
-    /// Room for another utterance without running further ahead than one.
     var canAcceptMore: Bool {
-        scheduled + queued.count + (rendering ? 1 : 0) < lookAhead
+        scheduled + queued.count + (rendering ? 1 : 0) < maxInFlight
+            && scheduledSeconds < maxScheduledSeconds
     }
 
     /// - Parameters:
@@ -106,18 +114,11 @@ final class TrimmedUtterancePlayer {
         // while the first still holds the synthesizer.
         queued.removeAll()
         scheduled = 0
+        scheduledSeconds = 0
         failureReason = nil
         returned.removeAll()
         player.stop()
         return true
-    }
-
-    /// Shuts the engine down between bursts of speech. It is a second engine
-    /// beside the keep-alive one, and two idling audio graphs is a battery
-    /// cost with nothing to show for it.
-    func releaseEngine() {
-        guard isIdle, engine.isRunning else { return }
-        engine.stop()
     }
 
     // MARK: - Render pipeline
@@ -184,10 +185,13 @@ final class TrimmedUtterancePlayer {
             player.scheduleBuffer(gap, at: nil, options: [])
         }
         scheduled += 1
+        scheduledSeconds += outcome.playedSeconds
+        let playedSeconds = outcome.playedSeconds
         player.scheduleBuffer(audio, at: nil, options: [], completionCallbackType: .dataPlayedBack) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self, token == self.generation else { return }
                 self.scheduled -= 1
+                self.scheduledSeconds = max(self.scheduledSeconds - playedSeconds, 0)
                 self.progress()
             }
         }
@@ -222,26 +226,8 @@ final class TrimmedUtterancePlayer {
 
     /// Returns a failure description, or nil when the engine is ready.
     private func prepareEngine(format: AVAudioFormat) -> String? {
-        if !attached {
-            engine.attach(player)
-            attached = true
-        }
-        if connectedFormat?.sampleRate != format.sampleRate
-            || connectedFormat?.channelCount != format.channelCount {
-            if engine.isRunning {
-                engine.stop()
-            }
-            engine.connect(player, to: engine.mainMixerNode, format: format)
-            connectedFormat = format
-        }
-        if !engine.isRunning {
-            do {
-                try engine.start()
-            } catch {
-                return "engine start failed: \(error.localizedDescription)"
-            }
-        }
-        return nil
+        host.connect(player, format: format)
+        return host.start()
     }
 }
 

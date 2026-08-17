@@ -23,8 +23,8 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     private let synthesizer = AVSpeechSynthesizer()
-    private let beepPlayer = BeepPlayer()
-    private let trimmedPlayer = TrimmedUtterancePlayer()
+    private let beepPlayer: BeepPlayer
+    private let trimmedPlayer: TrimmedUtterancePlayer
     private var pending: [Step] = []
     private var speaking = false
     private var voiceCache: [String: AVSpeechSynthesisVoice?] = [:]
@@ -70,7 +70,9 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         pauseMode != .off && !trimDisabled
     }
 
-    override init() {
+    init(host: AudioEngineHost) {
+        beepPlayer = BeepPlayer(host: host)
+        trimmedPlayer = TrimmedUtterancePlayer(host: host)
         super.init()
         synthesizer.delegate = self
         #if os(iOS)
@@ -89,6 +91,14 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         }
         trimmedPlayer.onFailure = { [weak self] reason, returned in
             self?.handleTrimFailure(reason, returned: returned)
+        }
+        host.onConfigurationChange = { [weak self] in
+            guard let self else { return }
+            // Whatever was scheduled died with the old graph; drop it and
+            // carry on with the queue rather than waiting for callbacks that
+            // will never come.
+            self.trimmedPlayer.stopAll()
+            self.speakNextIfIdle()
         }
     }
 
@@ -122,6 +132,8 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     func stopAudioKeepAlive() {
+        // One shared engine now, so stopping it would cut speech off mid-word.
+        guard trimmedPlayer.isIdle else { return }
         beepPlayer.stopKeepAlive()
     }
 
@@ -129,7 +141,6 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         pending.removeAll()
         interruptCurrentUtterance()
         if isIdle {
-            trimmedPlayer.releaseEngine()
             onActivity?(false)
         }
     }
@@ -158,7 +169,6 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         }
         guard !speaking else { return }
         guard !pending.isEmpty else {
-            trimmedPlayer.releaseEngine()
             onActivity?(false)
             return
         }
@@ -198,7 +208,6 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
             }
         }
         if isIdle {
-            trimmedPlayer.releaseEngine()
             onActivity?(false)
         }
     }

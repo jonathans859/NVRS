@@ -34,10 +34,13 @@ final class MirrorViewModel: ObservableObject {
     /// Utterances that fell back to plain speak() because the render failed.
     @Published private(set) var trimFallbacks = 0
     @Published private(set) var lastTrimFailure: String?
+    private var probeToken = 0
 
     let settings: SettingsStore
-    private let renderer = SpeechRenderer()
-    private let renderProbe = OfflineRenderProbe()
+    /// One engine for beeps, mirrored speech and the probe alike.
+    private let audioHost: AudioEngineHost
+    private let renderer: SpeechRenderer
+    private let renderProbe: OfflineRenderProbe
     private let soundPlayer = SoundPlayer()
     private let audioSession = AudioSessionController()
     private let filterEngine = NotificationFilterEngine()
@@ -45,7 +48,13 @@ final class MirrorViewModel: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
 
     init(settings: SettingsStore) {
+        // Built locally: stored properties can't be read until every one of
+        // them has a value.
+        let host = AudioEngineHost()
         self.settings = settings
+        audioHost = host
+        renderer = SpeechRenderer(host: host)
+        renderProbe = OfflineRenderProbe(host: host)
         renderer.onActivity = { [weak self] active in
             guard let self else { return }
             if active {
@@ -266,8 +275,7 @@ final class MirrorViewModel: ObservableObject {
     /// separately answerable.
     func runRenderProbe(mode: PauseMode, silent: Bool) {
         guard !isProbing else { return }
-        isProbing = true
-        probeReport = [String(localized: "Rendering…")]
+        beginProbe(String(localized: "Rendering…"))
         if !silent {
             audioSession.speechActivity()
             audioError = audioSession.lastError
@@ -282,10 +290,7 @@ final class MirrorViewModel: ObservableObject {
             factor: settings.pauseFactor,
             silent: silent
         ) { [weak self] report in
-            guard let self else { return }
-            self.isProbing = false
-            self.probeReport = report.lines
-            Announce.post(report.headline)
+            self?.endProbe(report)
         }
     }
 
@@ -293,8 +298,7 @@ final class MirrorViewModel: ObservableObject {
     /// letters — the case where the phone used to lag far behind Windows.
     func runSpellProbe(mode: PauseMode) {
         guard !isProbing else { return }
-        isProbing = true
-        probeReport = [String(localized: "Spelling…")]
+        beginProbe(String(localized: "Spelling…"))
         audioSession.speechActivity()
         audioError = audioSession.lastError
         let voice = effectiveVoiceIdentifier().flatMap { AVSpeechSynthesisVoice(identifier: $0) }
@@ -306,11 +310,30 @@ final class MirrorViewModel: ObservableObject {
             mode: mode,
             factor: settings.pauseFactor
         ) { [weak self] report in
-            guard let self else { return }
-            self.isProbing = false
-            self.probeReport = report.lines
-            Announce.post(report.headline)
+            self?.endProbe(report)
         }
+    }
+
+    /// A probe that never reports back would leave its buttons disabled for
+    /// good, so every run carries a deadline.
+    private func beginProbe(_ status: String) {
+        isProbing = true
+        probeReport = [status]
+        probeToken += 1
+        let token = probeToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+            guard let self, self.isProbing, token == self.probeToken else { return }
+            self.isProbing = false
+            self.probeReport = [String(localized: "The probe did not report back within 20 seconds.")]
+            Announce.post(String(localized: "Probe timed out"))
+        }
+    }
+
+    private func endProbe(_ report: OfflineRenderProbe.Report) {
+        probeToken += 1
+        isProbing = false
+        probeReport = report.lines
+        Announce.post(report.headline)
     }
 
     /// Magic-tap target: mute/unmute local playback without dropping the link.

@@ -22,7 +22,11 @@ final class OfflineRenderProbe {
         var lines: [String]
     }
 
-    private let player = TrimmedUtterancePlayer()
+    private let player: TrimmedUtterancePlayer
+
+    init(host: AudioEngineHost) {
+        player = TrimmedUtterancePlayer(host: host)
+    }
 
     /// - Parameters:
     ///   - mode: usually the user's setting; `.off` gives the unshortened
@@ -43,12 +47,11 @@ final class OfflineRenderProbe {
         utterance.rate = rate
         utterance.pitchMultiplier = pitch
         utterance.volume = volume
+        // Leftover state from an earlier run must never make the next one
+        // look busy — that is what left the buttons dimmed for good.
+        player.stopAll()
         player.factor = factor
-        // Don't leave a second audio engine idling after a diagnostics run.
-        player.onProgress = { [weak self] in
-            guard let self, self.player.isIdle else { return }
-            self.player.releaseEngine()
-        }
+        player.onProgress = nil
         // The failure already reaches the report through onOutcome.
         player.onFailure = nil
         player.onOutcome = { outcome in
@@ -87,6 +90,7 @@ final class OfflineRenderProbe {
         let startedAt = CFAbsoluteTimeGetCurrent()
         var finished = false
 
+        player.stopAll()
         player.factor = factor
         player.onOutcome = { outcome in
             audioSeconds += outcome.playedSeconds
@@ -120,14 +124,12 @@ final class OfflineRenderProbe {
                 self.player.enqueue(remaining.removeFirst(), modeOverride: mode)
             }
             guard remaining.isEmpty, self.player.isIdle else { return }
-            self.player.releaseEngine()
             finish()
         }
         // A failed render stops the run rather than hanging the report.
-        player.onFailure = { [weak self] reason, _ in
+        player.onFailure = { reason, _ in
             if failure == nil { failure = reason }
             remaining.removeAll()
-            self?.player.releaseEngine()
             finish()
         }
         while !remaining.isEmpty, player.canAcceptMore {

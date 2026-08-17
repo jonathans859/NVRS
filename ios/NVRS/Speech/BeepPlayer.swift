@@ -3,26 +3,20 @@ import AVFoundation
 /// Plays NVDA's beep commands (e.g. capital-letter beeps) as short sine
 /// tones. Best effort: if the engine won't start, beeps are dropped.
 final class BeepPlayer {
-    private let engine = AVAudioEngine()
+    private let host: AudioEngineHost
     private let player = AVAudioPlayerNode()
     private let sampleRate: Double = 44100
-    private var configured = false
+
+    init(host: AudioEngineHost) {
+        self.host = host
+    }
 
     private func ensureRunning() -> Bool {
-        if !configured {
-            let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)
-            engine.attach(player)
-            engine.connect(player, to: engine.mainMixerNode, format: format)
-            configured = true
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else {
+            return false
         }
-        if !engine.isRunning {
-            do {
-                try engine.start()
-            } catch {
-                return false
-            }
-        }
-        return true
+        host.connect(player, format: format)
+        return host.start() == nil
     }
 
     /// The running engine renders silence between beeps, which doubles as
@@ -32,9 +26,7 @@ final class BeepPlayer {
     }
 
     func stopKeepAlive() {
-        if engine.isRunning {
-            engine.stop()
-        }
+        host.stop()
     }
 
     func play(hz: Double, ms: Double, pan: Float) {

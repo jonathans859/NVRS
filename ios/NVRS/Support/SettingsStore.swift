@@ -136,6 +136,14 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Back to the shipped defaults for the three sliders — the way out of a
+    /// voice you can barely understand, without hunting for the right values.
+    func resetSpeechBaselines() {
+        baseRate = Double(AVSpeechUtteranceDefaultSpeechRate)
+        basePitch = 1.0
+        baseVolume = 1.0
+    }
+
     var voiceDisplayName: String {
         guard let id = voiceIdentifier,
               let voice = AVSpeechSynthesisVoice(identifier: id)

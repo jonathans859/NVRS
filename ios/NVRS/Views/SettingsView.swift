@@ -43,6 +43,11 @@ struct SettingsView: View {
                 rateSlider
                 pitchSlider
                 volumeSlider
+                Button("Reset rate, pitch and volume") {
+                    settings.resetSpeechBaselines()
+                    Announce.post(String(localized: "Rate, pitch and volume reset"))
+                }
+                .accessibilityHint("Puts the three sliders above back to their default values.")
                 Button("Speak test phrase") {
                     viewModel.speakTest()
                 }
