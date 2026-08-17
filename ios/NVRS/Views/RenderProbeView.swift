@@ -33,6 +33,11 @@ struct RenderProbeView: View {
                 }
                 .disabled(viewModel.isProbing)
                 .accessibilityHint("Plays the same render with pauses shortened, so the two can be compared back to back.")
+                Button("Spell a word") {
+                    viewModel.runSpellProbe(mode: shorteningMode)
+                }
+                .disabled(viewModel.isProbing)
+                .accessibilityHint("Spells Eloquence one letter per utterance and measures the gaps between the letters.")
             } header: {
                 Text("Offline render")
             } footer: {

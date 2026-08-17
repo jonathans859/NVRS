@@ -289,6 +289,30 @@ final class MirrorViewModel: ObservableObject {
         }
     }
 
+    /// Spells a word through the trimmed path and reports the gaps between
+    /// letters — the case where the phone used to lag far behind Windows.
+    func runSpellProbe(mode: PauseMode) {
+        guard !isProbing else { return }
+        isProbing = true
+        probeReport = [String(localized: "Spelling…")]
+        audioSession.speechActivity()
+        audioError = audioSession.lastError
+        let voice = effectiveVoiceIdentifier().flatMap { AVSpeechSynthesisVoice(identifier: $0) }
+        renderProbe.spell(
+            voice: voice,
+            rate: effectiveRate(),
+            pitch: Float(settings.basePitch),
+            volume: Float(settings.baseVolume),
+            mode: mode,
+            factor: settings.pauseFactor
+        ) { [weak self] report in
+            guard let self else { return }
+            self.isProbing = false
+            self.probeReport = report.lines
+            Announce.post(report.headline)
+        }
+    }
+
     /// Magic-tap target: mute/unmute local playback without dropping the link.
     func toggleLocalMute() {
         isLocalSpeechMuted.toggle()

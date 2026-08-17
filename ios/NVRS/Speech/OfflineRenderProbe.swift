@@ -14,6 +14,9 @@ final class OfflineRenderProbe {
     /// yields the calibration data for the shortening factor.
     static let phrase = "One, two, three. Four? Five! Six: seven; eight."
 
+    /// Spelled one character per utterance, exactly as NVDA sends spelling.
+    static let word = "Eloquence"
+
     struct Report {
         var headline: String
         var lines: [String]
@@ -41,8 +44,94 @@ final class OfflineRenderProbe {
         utterance.pitchMultiplier = pitch
         utterance.volume = volume
         player.factor = factor
-        player.speak(utterance, modeOverride: mode, silent: silent) { outcome in
+        // Don't leave a second audio engine idling after a diagnostics run.
+        player.onProgress = { [weak self] in
+            guard let self, self.player.isIdle else { return }
+            self.player.releaseEngine()
+        }
+        // The failure already reaches the report through onOutcome.
+        player.onFailure = nil
+        player.onOutcome = { outcome in
             completion(Self.report(for: outcome, voice: voice, mode: mode, factor: factor, silent: silent))
+        }
+        player.enqueue(utterance, modeOverride: mode, silent: silent)
+    }
+
+    /// Spells a word one utterance per character — the case where the phone
+    /// used to fall far behind Windows — and measures the wall clock against
+    /// the audio actually produced. The difference is the gaps.
+    ///
+    /// Feeds with the same look-ahead discipline as `SpeechRenderer`, so the
+    /// number means what the live path does, not what a best case could do.
+    func spell(
+        voice: AVSpeechSynthesisVoice?,
+        rate: Float,
+        pitch: Float,
+        volume: Float,
+        mode: PauseMode,
+        factor: Double,
+        completion: @escaping (Report) -> Void
+    ) {
+        var remaining = Self.word.map { character -> AVSpeechUtterance in
+            let utterance = AVSpeechUtterance(string: String(character))
+            utterance.voice = voice
+            utterance.rate = rate
+            utterance.pitchMultiplier = pitch
+            utterance.volume = volume
+            return utterance
+        }
+        let letters = remaining.count
+        var audioSeconds = 0.0
+        var renderSeconds = 0.0
+        var failure: String?
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        var finished = false
+
+        player.factor = factor
+        player.onOutcome = { outcome in
+            audioSeconds += outcome.playedSeconds
+            renderSeconds += outcome.renderSeconds
+            if let reason = outcome.failure, failure == nil {
+                failure = reason
+            }
+        }
+        // Captures only locals on purpose: referencing the player here would
+        // close the loop player → callback → probe → player.
+        func finish() {
+            guard !finished else { return }
+            finished = true
+            completion(
+                Self.spellReport(
+                    voice: voice,
+                    letters: letters,
+                    audioSeconds: audioSeconds,
+                    renderSeconds: renderSeconds,
+                    wallClock: CFAbsoluteTimeGetCurrent() - startedAt,
+                    mode: mode,
+                    factor: factor,
+                    failure: failure
+                )
+            )
+        }
+
+        player.onProgress = { [weak self] in
+            guard let self, !finished else { return }
+            while !remaining.isEmpty, self.player.canAcceptMore {
+                self.player.enqueue(remaining.removeFirst(), modeOverride: mode)
+            }
+            guard remaining.isEmpty, self.player.isIdle else { return }
+            self.player.releaseEngine()
+            finish()
+        }
+        // A failed render stops the run rather than hanging the report.
+        player.onFailure = { [weak self] reason, _ in
+            if failure == nil { failure = reason }
+            remaining.removeAll()
+            self?.player.releaseEngine()
+            finish()
+        }
+        while !remaining.isEmpty, player.canAcceptMore {
+            player.enqueue(remaining.removeFirst(), modeOverride: mode)
         }
     }
 
@@ -91,6 +180,35 @@ final class OfflineRenderProbe {
 
         return Report(
             headline: "\(ms(outcome.playedSeconds)) of \(ms(outcome.originalSeconds)), \(analysis.pauses.count) pauses",
+            lines: lines
+        )
+    }
+
+    private static func spellReport(
+        voice: AVSpeechSynthesisVoice?,
+        letters: Int,
+        audioSeconds: Double,
+        renderSeconds: Double,
+        wallClock: Double,
+        mode: PauseMode,
+        factor: Double,
+        failure: String?
+    ) -> Report {
+        var lines = [
+            "Spelled \(word), \(letters) letters, one utterance each.",
+            "Voice: \(voice?.name ?? "system default").",
+            "Mode: \(mode.label), keeping \(Int(factor * 100)) percent.",
+        ]
+        if let failure {
+            lines.append("At least one render failed: \(failure).")
+        }
+        let gaps = max(wallClock - audioSeconds, 0)
+        lines.append("Audio produced: \(ms(audioSeconds)).")
+        lines.append("Wall clock: \(ms(wallClock)), including the first render.")
+        lines.append("Gaps: \(ms(gaps)) in total, \(ms(gaps / Double(max(letters - 1, 1)))) per letter boundary.")
+        lines.append("Rendering cost \(ms(renderSeconds)) altogether, hidden behind playback except for the first letter.")
+        return Report(
+            headline: "\(ms(gaps)) of gaps over \(letters) letters",
             lines: lines
         )
     }
