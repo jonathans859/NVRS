@@ -31,6 +31,9 @@ final class MirrorViewModel: ObservableObject {
     /// Pause-shortening spike: last offline-render report, newest first line.
     @Published private(set) var probeReport: [String] = []
     @Published private(set) var isProbing = false
+    /// Utterances that fell back to plain speak() because the render failed.
+    @Published private(set) var trimFallbacks = 0
+    @Published private(set) var lastTrimFailure: String?
 
     let settings: SettingsStore
     private let renderer = SpeechRenderer()
@@ -62,6 +65,10 @@ final class MirrorViewModel: ObservableObject {
         }
         renderer.onUtteranceStarted = { [weak self] in
             self?.utterancesStarted += 1
+        }
+        renderer.onTrimFailure = { [weak self] reason in
+            self?.trimFallbacks += 1
+            self?.lastTrimFailure = reason
         }
         // A connection that died while the app couldn't run shows up as
         // failed only after backoff; reconnect right away instead when the
@@ -113,6 +120,10 @@ final class MirrorViewModel: ObservableObject {
         renderer.baseRate = effectiveRate()
         renderer.basePitch = Float(settings.basePitch)
         renderer.baseVolume = Float(settings.baseVolume)
+        // Assigning the mode re-arms trimming after it disabled itself on a
+        // voice that won't render, so touching any setting is the way back.
+        renderer.pauseMode = settings.pauseMode
+        renderer.pauseFactor = settings.pauseFactor
     }
 
     /// The phone voice, honoring "follow PC voice": an explicit mapping
@@ -253,29 +264,28 @@ final class MirrorViewModel: ObservableObject {
     /// own engine, unmodified — the two halves of the question ("does this
     /// voice render offline" and "can we play what it gives us") stay
     /// separately answerable.
-    func runRenderProbe(play: Bool) {
+    func runRenderProbe(mode: PauseMode, silent: Bool) {
         guard !isProbing else { return }
         isProbing = true
         probeReport = [String(localized: "Rendering…")]
-        if play {
+        if !silent {
             audioSession.speechActivity()
             audioError = audioSession.lastError
         }
         let voice = effectiveVoiceIdentifier().flatMap { AVSpeechSynthesisVoice(identifier: $0) }
         renderProbe.run(
-            phrase: OfflineRenderProbe.phrase,
             voice: voice,
             rate: effectiveRate(),
             pitch: Float(settings.basePitch),
             volume: Float(settings.baseVolume),
-            play: play
+            mode: mode,
+            factor: settings.pauseFactor,
+            silent: silent
         ) { [weak self] report in
-            Task { @MainActor in
-                guard let self else { return }
-                self.isProbing = false
-                self.probeReport = report.lines
-                Announce.post(report.headline)
-            }
+            guard let self else { return }
+            self.isProbing = false
+            self.probeReport = report.lines
+            Announce.post(report.headline)
         }
     }
 

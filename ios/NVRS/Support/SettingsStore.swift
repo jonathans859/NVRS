@@ -66,6 +66,18 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(baseVolume, forKey: "baseVolume") }
     }
 
+    /// Eloquence-style pause shortening, in the IBMTTS driver's own three
+    /// modes. Off by default: it takes speech off AVSpeechSynthesizer's own
+    /// playback path onto ours.
+    @Published var pauseMode: PauseMode {
+        didSet { defaults.set(pauseMode.rawValue, forKey: "pauseMode") }
+    }
+
+    /// Fraction of each pause that survives shortening.
+    @Published var pauseFactor: Double {
+        didSet { defaults.set(pauseFactor, forKey: "pauseFactor") }
+    }
+
     /// Switch the phone voice when the PC synth/voice changes, using the
     /// mapping table (or same-language auto pick when unmapped).
     @Published var followPCVoice: Bool {
@@ -106,6 +118,8 @@ final class SettingsStore: ObservableObject {
             ?? Double(AVSpeechUtteranceDefaultSpeechRate)
         basePitch = defaults.object(forKey: "basePitch") as? Double ?? 1.0
         baseVolume = defaults.object(forKey: "baseVolume") as? Double ?? 1.0
+        pauseMode = PauseMode(rawValue: defaults.integer(forKey: "pauseMode")) ?? .off
+        pauseFactor = defaults.object(forKey: "pauseFactor") as? Double ?? 0.3
         followPCVoice = defaults.object(forKey: "followPCVoice") as? Bool ?? true
         followPCRate = defaults.object(forKey: "followPCRate") as? Bool ?? true
         if let data = defaults.data(forKey: "pcVoices"),

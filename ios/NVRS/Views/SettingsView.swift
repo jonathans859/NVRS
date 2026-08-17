@@ -47,14 +47,30 @@ struct SettingsView: View {
                     viewModel.speakTest()
                 }
                 .accessibilityHint("Speaks locally through the same audio path as mirrored speech, without the PC.")
-                NavigationLink("Pause probe") {
-                    RenderProbeView()
-                }
-                .accessibilityHint("Experiment towards shortening Eloquence pauses on this device.")
             } header: {
                 Text("Speech")
             } footer: {
                 Text("NVDA's pitch, rate and volume changes are applied relative to these baselines.")
+            }
+
+            Section {
+                Picker("Shorten pauses", selection: $settings.pauseMode) {
+                    ForEach(PauseMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .accessibilityHint("Shortens the silence in speech the way the IBMTTS driver does on the PC. Speech is rendered and played by NVRS instead of by the system.")
+                if settings.pauseMode != .off {
+                    pauseFactorSlider
+                }
+                NavigationLink("Pause probe") {
+                    RenderProbeView()
+                }
+                .accessibilityHint("Measures the pauses in this voice and compares shortened against unshortened playback.")
+            } header: {
+                Text("Pauses")
+            } footer: {
+                Text("Shortening only changes the length of the silence — words, intonation and punctuation are untouched. If a voice cannot be rendered this way, speech falls back to the system path automatically.")
             }
 
             Section {
@@ -80,6 +96,16 @@ struct SettingsView: View {
             Text("Pitch")
         }
         .accessibilityValue("\(Int(settings.basePitch * 100)) percent")
+    }
+
+    /// How much of each pause survives. Tunable in the field on purpose:
+    /// the right value is a matter of taste, and a TestFlight round trip
+    /// costs ten minutes.
+    private var pauseFactorSlider: some View {
+        Slider(value: $settings.pauseFactor, in: 0.1...1.0, step: 0.05) {
+            Text("Pause length")
+        }
+        .accessibilityValue("\(Int(settings.pauseFactor * 100)) percent of the original")
     }
 
     private var volumeSlider: some View {

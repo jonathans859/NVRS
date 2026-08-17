@@ -24,9 +24,15 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
 
     private let synthesizer = AVSpeechSynthesizer()
     private let beepPlayer = BeepPlayer()
+    private let trimmedPlayer = TrimmedUtterancePlayer()
     private var pending: [Step] = []
     private var speaking = false
     private var voiceCache: [String: AVSpeechSynthesisVoice?] = [:]
+    /// Consecutive failed renders. A voice that can't be rendered offline
+    /// must not cost every utterance a failed attempt, so trimming switches
+    /// itself off until the user changes the setting again.
+    private var trimFailureStreak = 0
+    private var trimDisabled = false
 
     /// Baselines, updated from Settings. Read on the main thread.
     var baseVoiceIdentifier: String?
@@ -42,12 +48,37 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// utterance; drives the diagnostics counter.
     var onUtteranceStarted: (() -> Void)?
 
+    /// Reports a failed offline render, with the reason. The utterance is
+    /// still spoken — this is for the diagnostics line, not for the user.
+    var onTrimFailure: ((String) -> Void)?
+
+    /// Pause shortening. `.off` keeps the plain `speak()` path, so the
+    /// default behaviour is byte-for-byte what it was.
+    var pauseMode: PauseMode = .off {
+        didSet {
+            trimmedPlayer.mode = pauseMode
+            trimFailureStreak = 0
+            trimDisabled = false
+        }
+    }
+
+    var pauseFactor: Double = 0.3 {
+        didSet { trimmedPlayer.factor = pauseFactor }
+    }
+
+    private var trimmingActive: Bool {
+        pauseMode != .off && !trimDisabled
+    }
+
     override init() {
         super.init()
         synthesizer.delegate = self
         #if os(iOS)
         synthesizer.usesApplicationAudioSession = true
         #endif
+        trimmedPlayer.onStarted = { [weak self] in
+            self?.onUtteranceStarted?()
+        }
     }
 
     // MARK: - Public API (main thread)
@@ -87,6 +118,7 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         pending.removeAll()
         interruptCurrentUtterance()
         if !speaking {
+            trimmedPlayer.releaseEngine()
             onActivity?(false)
         }
     }
@@ -98,6 +130,12 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     // MARK: - Queue pump
 
     private func interruptCurrentUtterance() {
+        // The trimmed path has no didCancel to pump the queue, so it settles
+        // its own state and leaves the pumping to the caller.
+        if trimmedPlayer.stopIfPlaying() {
+            speaking = false
+            return
+        }
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
             // didCancel fires and pumps the queue.
@@ -107,6 +145,7 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     private func speakNextIfIdle() {
         guard !speaking else { return }
         guard !pending.isEmpty else {
+            trimmedPlayer.releaseEngine()
             onActivity?(false)
             return
         }
@@ -115,12 +154,40 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         let step = pending.removeFirst()
         switch step {
         case .utterance(let utterance):
-            synthesizer.speak(utterance)
+            if trimmingActive {
+                speakTrimmed(utterance)
+            } else {
+                synthesizer.speak(utterance)
+            }
         case .beep(let hz, let ms, let pan):
             // NVDA beeps (tones.beep) are asynchronous: play and move on.
             beepPlayer.play(hz: hz, ms: ms, pan: pan)
             speaking = false
             speakNextIfIdle()
+        }
+    }
+
+    /// Renders, shortens and plays one utterance. Any failure falls straight
+    /// back to `speak()`: pause shortening is a comfort feature, and losing a
+    /// line of speech to it would be a bug worth more than the feature.
+    private func speakTrimmed(_ utterance: AVSpeechUtterance) {
+        trimmedPlayer.speak(utterance) { [weak self] outcome in
+            guard let self else { return }
+            guard let failure = outcome.failure else {
+                self.trimFailureStreak = 0
+                self.speaking = false
+                self.speakNextIfIdle()
+                return
+            }
+            self.trimFailureStreak += 1
+            if self.trimFailureStreak >= 3 {
+                self.trimDisabled = true
+                self.onTrimFailure?("\(failure) — pause shortening disabled")
+            } else {
+                self.onTrimFailure?(failure)
+            }
+            // didFinish pumps the queue from here on.
+            self.synthesizer.speak(utterance)
         }
     }
 

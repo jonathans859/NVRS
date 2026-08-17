@@ -1,0 +1,173 @@
+import AVFoundation
+import Foundation
+
+/// Renders an utterance to PCM instead of playing it, via
+/// `AVSpeechSynthesizer.write(_:toBufferCallback:)`.
+///
+/// Field-measured on Apple's 16 kHz voices: about 20× real time once warm,
+/// so a one-second utterance costs ~50 ms before playback can start. The
+/// first render after launch costs roughly three times that (engine warm-up).
+final class SpeechBufferRenderer {
+    struct Result {
+        /// All buffers concatenated into one, in standard float format.
+        /// Nil means the voice gave us nothing usable — the caller must fall
+        /// back to ordinary `speak()` rather than drop the speech.
+        var buffer: AVAudioPCMBuffer?
+        var bufferCount = 0
+        var emptyBuffers = 0
+        var unreadableBuffers = 0
+        var renderSeconds: Double = 0
+        var timedOut = false
+
+        var failure: String? {
+            if timedOut { return "render timed out" }
+            if buffer == nil { return "voice returned no audio" }
+            return nil
+        }
+    }
+
+    /// A voice that hasn't finished by now is not going to be usable for a
+    /// live mirror; the caller falls back to `speak()` instead of waiting.
+    var timeout: TimeInterval = 3.0
+
+    private let queue = DispatchQueue(label: "com.jonathan859.nvrs.bufferrender")
+    private let synthesizer = AVSpeechSynthesizer()
+
+    private var busy = false
+    private var buffers: [AVAudioPCMBuffer] = []
+    private var result = Result()
+    private var startedAt: CFAbsoluteTime = 0
+    private var watchdog: DispatchWorkItem?
+    private var completion: ((Result) -> Void)?
+
+    /// Completion is always delivered on the main queue, exactly once.
+    func render(_ utterance: AVSpeechUtterance, completion: @escaping (Result) -> Void) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            guard !self.busy else {
+                // Reported as a failure, which means the caller speaks it the
+                // ordinary way rather than losing it.
+                DispatchQueue.main.async { completion(Result()) }
+                return
+            }
+            self.busy = true
+            self.buffers = []
+            self.result = Result()
+            self.completion = completion
+            self.startedAt = CFAbsoluteTimeGetCurrent()
+
+            let watchdog = DispatchWorkItem { [weak self] in
+                self?.finish(timedOut: true)
+            }
+            self.watchdog = watchdog
+            self.queue.asyncAfter(deadline: .now() + self.timeout, execute: watchdog)
+
+            // Drive the synthesizer from the main thread, like the ordinary
+            // speak() path — write-versus-speak should be the only difference.
+            DispatchQueue.main.async {
+                self.synthesizer.write(utterance) { [weak self] buffer in
+                    // The callback arrives on an internal queue and the
+                    // buffer may be recycled afterwards, so copy immediately.
+                    self?.queue.async {
+                        self?.accept(buffer)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Collection (private queue)
+
+    private func accept(_ buffer: AVAudioBuffer) {
+        guard busy else { return }
+        guard let pcm = buffer as? AVAudioPCMBuffer else {
+            result.unreadableBuffers += 1
+            return
+        }
+        // A zero-length buffer is the documented end-of-stream signal.
+        guard pcm.frameLength > 0 else {
+            result.emptyBuffers += 1
+            finish(timedOut: false)
+            return
+        }
+        if let converted = Self.floatCopy(of: pcm) {
+            buffers.append(converted)
+            result.bufferCount += 1
+        } else {
+            result.unreadableBuffers += 1
+        }
+    }
+
+    private func finish(timedOut: Bool) {
+        guard busy else { return }
+        busy = false
+        watchdog?.cancel()
+        watchdog = nil
+        result.renderSeconds = CFAbsoluteTimeGetCurrent() - startedAt
+        result.timedOut = timedOut
+        // A timeout means we may be holding half an utterance; speaking half
+        // of something is worse than falling back, so hand back nothing.
+        result.buffer = timedOut ? nil : SilenceTrimmer.concatenated(buffers)
+        buffers = []
+        let finished = result
+        let completion = self.completion
+        self.completion = nil
+        DispatchQueue.main.async {
+            completion?(finished)
+        }
+    }
+
+    // MARK: - Format normalisation
+
+    /// Copies any PCM buffer into a standard non-interleaved float buffer.
+    /// Apple's TTS hands back int16 for several voices, and
+    /// `AVAudioPlayerNode` insists on the format its connection was made
+    /// with, so normalising once here removes both problems.
+    static func floatCopy(of buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        let source = buffer.format
+        let frames = Int(buffer.frameLength)
+        let channels = Int(source.channelCount)
+        guard frames > 0, channels > 0,
+              let target = AVAudioFormat(
+                  standardFormatWithSampleRate: source.sampleRate,
+                  channels: source.channelCount
+              ),
+              let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: AVAudioFrameCount(frames)),
+              let destination = output.floatChannelData
+        else { return nil }
+        output.frameLength = AVAudioFrameCount(frames)
+        let step = source.isInterleaved ? channels : 1
+
+        switch source.commonFormat {
+        case .pcmFormatFloat32:
+            guard let samples = buffer.floatChannelData else { return nil }
+            for channel in 0..<channels {
+                let base = source.isInterleaved ? samples[0] + channel : samples[channel]
+                for frame in 0..<frames {
+                    destination[channel][frame] = base[frame * step]
+                }
+            }
+        case .pcmFormatInt16:
+            guard let samples = buffer.int16ChannelData else { return nil }
+            let scale = Float(1.0 / 32768.0)
+            for channel in 0..<channels {
+                let base = source.isInterleaved ? samples[0] + channel : samples[channel]
+                for frame in 0..<frames {
+                    destination[channel][frame] = Float(base[frame * step]) * scale
+                }
+            }
+        case .pcmFormatInt32:
+            guard let samples = buffer.int32ChannelData else { return nil }
+            let scale = Float(1.0 / 2147483648.0)
+            for channel in 0..<channels {
+                let base = source.isInterleaved ? samples[0] + channel : samples[channel]
+                for frame in 0..<frames {
+                    destination[channel][frame] = Float(base[frame * step]) * scale
+                }
+            }
+        default:
+            return nil
+        }
+        return output
+    }
+}

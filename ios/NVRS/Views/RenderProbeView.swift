@@ -1,30 +1,42 @@
 import SwiftUI
 
-/// Pause-shortening spike (see `.claude-notes/pause-shortening-ios-v4.md`).
-/// Temporary diagnostics screen: it answers whether the selected voice can be
-/// rendered to audio buffers and how much of its output is silence. Delete
-/// this view together with `OfflineRenderProbe` if the answer is no.
+/// Diagnostics for pause shortening: what the pauses in this voice actually
+/// measure, and how shortened playback compares against unshortened, back to
+/// back. Notes in `.claude-notes/pause-shortening-ios-v4.md`.
 struct RenderProbeView: View {
+    @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var viewModel: MirrorViewModel
+
+    /// "Play shortened" must demonstrate something even while the live
+    /// setting is still off.
+    private var shorteningMode: PauseMode {
+        settings.pauseMode == .off ? .all : settings.pauseMode
+    }
 
     var body: some View {
         Form {
             Section {
-                Button("Render test phrase") {
-                    viewModel.runRenderProbe(play: false)
+                Button("Measure only") {
+                    viewModel.runRenderProbe(mode: settings.pauseMode, silent: true)
                 }
                 .disabled(viewModel.isProbing)
-                .accessibilityHint("Renders the phrase to audio buffers without playing it, then reports what came back.")
+                .accessibilityHint("Renders the phrase without playing it and reports the pauses it found.")
 
-                Button("Render and play") {
-                    viewModel.runRenderProbe(play: true)
+                Button("Play unshortened") {
+                    viewModel.runRenderProbe(mode: .off, silent: false)
                 }
                 .disabled(viewModel.isProbing)
-                .accessibilityHint("Renders the phrase, then plays the buffers unmodified through the app's own audio engine. Should sound exactly like the test phrase.")
+                .accessibilityHint("Plays the rendered phrase with every pause intact. The reference for comparison.")
+
+                Button("Play shortened") {
+                    viewModel.runRenderProbe(mode: shorteningMode, silent: false)
+                }
+                .disabled(viewModel.isProbing)
+                .accessibilityHint("Plays the same render with pauses shortened, so the two can be compared back to back.")
             } header: {
                 Text("Offline render")
             } footer: {
-                Text("Groundwork for shortening pauses: the phrase is \(OfflineRenderProbe.phrase)")
+                Text("The phrase is \(OfflineRenderProbe.phrase) Compare the two playbacks back to back; the setting above decides how mirrored speech behaves.")
             }
 
             Section {
