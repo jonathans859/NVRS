@@ -74,6 +74,9 @@ struct ContentView: View {
                     if viewModel.audioResets > 0 {
                         Text("Audio graph reset \(viewModel.audioResets) times; the speech it was playing was queued again.")
                     }
+                    if viewModel.typingCancelsHeld > 0 {
+                        Text("Queued \(viewModel.typingCancelsHeld) keystroke echoes instead of cutting them off.")
+                    }
                     if viewModel.trimFallbacks > 0 {
                         Text("Pause shortening fell back \(viewModel.trimFallbacks) times. Last reason: \(viewModel.lastTrimFailure ?? "unknown").")
                     }

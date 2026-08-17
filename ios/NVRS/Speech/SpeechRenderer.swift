@@ -35,6 +35,13 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     private var trimDisabled = false
     private var trimRearm: DispatchWorkItem?
     private var isPaused = false
+    /// The last utterance handed to a player was a keystroke echo.
+    private var lastEnqueuedBrief = false
+    /// A keystroke echo: one or two characters, as typing produces.
+    private let briefCharacterLimit = 3
+    /// How far behind the PC we are willing to fall before letting a
+    /// keystroke cancel do its job again.
+    private let maxTypingBacklog = 6
 
     /// Baselines, updated from Settings. Read on the main thread.
     var baseVoiceIdentifier: String?
@@ -53,6 +60,10 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// Reports a failed offline render, with the reason. The utterance is
     /// still spoken — this is for the diagnostics line, not for the user.
     var onTrimFailure: ((String) -> Void)?
+
+    /// A keystroke cancel was held back so the letters could queue instead
+    /// of swallowing each other. Diagnostics only.
+    var onTypingCancelHeld: (() -> Void)?
 
     /// The audio graph was torn down mid-speech and what it was playing had
     /// to be queued again. Diagnostics only; recovery is automatic.
@@ -157,7 +168,35 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
+    /// NVDA's cancel, as sent by the PC.
+    ///
+    /// NVDA interrupts itself for every keystroke echo ("speech interrupt for
+    /// typed characters"), so honouring each one literally means fast typing
+    /// plays only the last letter: on the PC the synth starts instantly, but
+    /// here the letter is still in the pipeline — more so over Bluetooth,
+    /// whose output latency widens the window — and gets thrown away before
+    /// it is audible. While the outstanding speech is nothing but keystroke
+    /// echoes and we are keeping up, the letters queue instead. Fall far
+    /// enough behind and the cancel is honoured again, so holding a key
+    /// cannot leave the phone reading out a paragraph of stale letters.
+    func remoteCancel() {
+        if isTypingBurst {
+            onTypingCancelHeld?()
+            return
+        }
+        cancelAll()
+    }
+
+    private var isTypingBurst: Bool {
+        guard lastEnqueuedBrief, !isIdle, pending.count <= maxTypingBacklog else { return false }
+        return pending.allSatisfy { step in
+            guard case .utterance(let utterance) = step else { return true }
+            return utterance.speechString.count <= briefCharacterLimit
+        }
+    }
+
     func cancelAll() {
+        lastEnqueuedBrief = false
         // NVDA clears its own pause when speech is cancelled, so a stale
         // pause must never outlive the queue it was holding.
         if isPaused {
@@ -203,6 +242,7 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         let step = pending.removeFirst()
         switch step {
         case .utterance(let utterance):
+            lastEnqueuedBrief = utterance.speechString.count <= briefCharacterLimit
             synthesizer.speak(utterance)
         case .beep(let hz, let ms, let pan):
             // NVDA beeps (tones.beep) are asynchronous: play and move on.
@@ -224,6 +264,7 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
                 guard trimmedPlayer.canAcceptMore else { return }
                 pending.removeFirst()
                 onActivity?(true)
+                lastEnqueuedBrief = utterance.speechString.count <= briefCharacterLimit
                 trimmedPlayer.enqueue(utterance)
             case .beep(let hz, let ms, let pan):
                 // Beeps play on their own node the moment they are reached,
