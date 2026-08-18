@@ -26,6 +26,11 @@ final class TrimmedUtterancePlayer {
         var sampleRate: Double = 0
         var channels: AVAudioChannelCount = 0
         var retried = false
+        /// Split out from `failure` so diagnostics can tell a hung render
+        /// from a voice that simply gave us nothing: only one of the two is
+        /// heard as a stall, and they have different causes.
+        var timedOut = false
+        var idleSeconds: Double?
         var analysis = SilenceTrimmer.Analysis()
     }
 
@@ -205,6 +210,8 @@ final class TrimmedUtterancePlayer {
         outcome.renderSeconds = result.renderSeconds
         outcome.bufferCount = result.bufferCount
         outcome.retried = result.retried
+        outcome.timedOut = result.timedOut
+        outcome.idleSeconds = result.idleSeconds
 
         guard let rendered = result.buffer, result.failure == nil else {
             outcome.failure = result.failure ?? "voice returned no audio"

@@ -17,6 +17,11 @@ final class SpeechBufferRenderer {
         var emptyBuffers = 0
         var unreadableBuffers = 0
         var renderSeconds: Double = 0
+        /// How long the renderer sat idle before this render was asked for.
+        /// Nil for the first one. A render that hangs is suspected to be a
+        /// cold re-warm, and it is the quiet before it — not its own
+        /// duration — that would show that.
+        var idleSeconds: Double?
         var timedOut = false
         /// The first attempt came back empty and we asked again.
         var retried = false
@@ -40,6 +45,12 @@ final class SpeechBufferRenderer {
     private let minimumWriteGap: TimeInterval = 0.03
     private let retryDelay: TimeInterval = 0.08
 
+    /// A write we aborted needs a moment before the synthesizer is usable
+    /// again; asking for the next render inside that window risks exactly
+    /// the empty result the abort exists to prevent. Not measured — the
+    /// retry above remains the real safety net.
+    private let abortSettleGap: TimeInterval = 0.12
+
     private let queue = DispatchQueue(label: "com.jonathan859.nvrs.bufferrender")
     private let synthesizer = AVSpeechSynthesizer()
 
@@ -49,6 +60,9 @@ final class SpeechBufferRenderer {
     private var startedAt: CFAbsoluteTime = 0
     private var finishedAt: CFAbsoluteTime = 0
     private var attempt = 0
+    /// The previous write was aborted rather than finished, so the next one
+    /// waits longer before assuming the synthesizer is free.
+    private var abortedWrite = false
     private var pendingUtterance: AVSpeechUtterance?
     /// Identifies which `write()` call a buffer belongs to. The callback
     /// itself carries no such marker, so buffers arriving late from a write
@@ -76,6 +90,9 @@ final class SpeechBufferRenderer {
             self.attempt = 0
             self.pendingUtterance = utterance
             self.startedAt = CFAbsoluteTimeGetCurrent()
+            if self.finishedAt > 0 {
+                self.result.idleSeconds = self.startedAt - self.finishedAt
+            }
             self.startWrite(after: 0)
         }
     }
@@ -85,7 +102,9 @@ final class SpeechBufferRenderer {
         writeToken += 1
         let token = writeToken
         let sinceLastWrite = CFAbsoluteTimeGetCurrent() - finishedAt
-        let delay = max(minimumWriteGap - sinceLastWrite, 0) + extraDelay
+        let gap = abortedWrite ? abortSettleGap : minimumWriteGap
+        abortedWrite = false
+        let delay = max(gap - sinceLastWrite, 0) + extraDelay
 
         let watchdog = DispatchWorkItem { [weak self] in
             self?.finish(timedOut: true)
@@ -135,6 +154,19 @@ final class SpeechBufferRenderer {
         watchdog?.cancel()
         watchdog = nil
         finishedAt = CFAbsoluteTimeGetCurrent()
+
+        if timedOut {
+            // The write that never came back still holds the synthesizer,
+            // and a fresh write() issued against a busy one returns nothing
+            // at all — which is how a single timeout became a run of failed
+            // renders and a stretch of unshortened pauses. Let go of it here
+            // instead of leaving it for the next utterance to trip over.
+            abortedWrite = true
+            let synthesizer = self.synthesizer
+            DispatchQueue.main.async {
+                synthesizer.stopSpeaking(at: .immediate)
+            }
+        }
 
         // An empty result is usually the synthesizer not being ready yet
         // rather than a voice that cannot render; ask once more before

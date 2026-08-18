@@ -61,6 +61,9 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// still spoken — this is for the diagnostics line, not for the user.
     var onTrimFailure: ((String) -> Void)?
 
+    /// Every render's cost and result, success or failure. Diagnostics only.
+    var onRenderOutcome: ((TrimmedUtterancePlayer.Outcome) -> Void)?
+
     /// A keystroke cancel was held back so the letters could queue instead
     /// of swallowing each other. Diagnostics only.
     var onTypingCancelHeld: (() -> Void)?
@@ -106,6 +109,7 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
             if outcome.failure == nil {
                 self?.trimFailureStreak = 0
             }
+            self?.onRenderOutcome?(outcome)
         }
         trimmedPlayer.onFailure = { [weak self] reason, returned in
             self?.handleTrimFailure(reason, returned: returned)
