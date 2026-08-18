@@ -67,6 +67,7 @@ struct SettingsView: View {
                 .accessibilityHint("Shortens the silence in speech the way the IBMTTS driver does on the PC. Speech is rendered and played by NVRS instead of by the system.")
                 if settings.pauseMode != .off {
                     pauseFactorSlider
+                    pauseLimitSlider
                 }
                 NavigationLink("Pause probe") {
                     RenderProbeView()
@@ -75,7 +76,7 @@ struct SettingsView: View {
             } header: {
                 Text("Pauses")
             } footer: {
-                Text("Shortening only changes the length of the silence — words, intonation and punctuation are untouched. If a voice cannot be rendered this way, speech falls back to the system path automatically.")
+                Text("Shortening only changes the length of the silence — words, intonation and punctuation are untouched. If a voice cannot be rendered this way, or the text is longer than the limit, speech falls back to the system path automatically.")
             }
 
             Section {
@@ -111,6 +112,25 @@ struct SettingsView: View {
             Text("Pause length")
         }
         .accessibilityValue("\(Int(settings.pauseFactor * 100)) percent of the original")
+    }
+
+    /// How long a text may be and still be shortened. Rendering is batch —
+    /// nothing plays until the whole utterance has been rendered — so there
+    /// is a length beyond which the delay costs more than the shortening is
+    /// worth. Where that lies depends on the device and the voice, so it is
+    /// here rather than baked in.
+    private var pauseLimitSlider: some View {
+        Slider(value: pauseLimitBinding, in: 200...6000, step: 200) {
+            Text("Longest text to shorten")
+        }
+        .accessibilityValue("\(settings.pauseCharacterLimit) characters")
+    }
+
+    private var pauseLimitBinding: Binding<Double> {
+        Binding(
+            get: { Double(settings.pauseCharacterLimit) },
+            set: { settings.pauseCharacterLimit = Int($0) }
+        )
     }
 
     private var volumeSlider: some View {

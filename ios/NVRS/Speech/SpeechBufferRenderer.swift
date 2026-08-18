@@ -33,9 +33,32 @@ final class SpeechBufferRenderer {
         }
     }
 
-    /// A voice that hasn't finished by now is not going to be usable for a
-    /// live mirror; the caller falls back to `speak()` instead of waiting.
-    var timeout: TimeInterval = 3.0
+    /// How long one render may take before the caller gives up on it and
+    /// speaks the utterance the ordinary way, scaled by how much text there
+    /// is.
+    ///
+    /// Measured over 1425 field renders: about 30 ms fixed plus 0.3 ms per
+    /// character at the worst (92 ms for 309 characters). A flat 3 s was
+    /// therefore 33x the slowest healthy render — and since the watchdog only
+    /// ever fires on a stall, that number was really deciding how long a
+    /// stall is allowed to sound like silence. Three seconds of it, three
+    /// times over, is what one bad minute sounded like in the field.
+    ///
+    /// This is roughly 5x the measured cost at every length: 0.6 s for short
+    /// text, 3.3 s at a 2000-character limit. Past 400 characters it is
+    /// extrapolation — nothing longer reached the renderer before — so watch
+    /// `lastTimeoutCharacters` in the diagnostics for honest renders being
+    /// cut off.
+    private let timeoutBase: TimeInterval = 0.3
+    private let timeoutPerCharacter: TimeInterval = 0.0015
+    /// The first render after launch costs about three times a warm one, and
+    /// a cold re-warm after a long idle is suspected to do the same. For
+    /// short utterances the floor is what covers that.
+    private let timeoutFloor: TimeInterval = 0.6
+
+    func timeout(forCharacters characters: Int) -> TimeInterval {
+        max(timeoutFloor, timeoutBase + Double(characters) * timeoutPerCharacter)
+    }
 
     /// Back-to-back `write()` calls on one synthesizer return nothing at all
     /// for the second one often enough to matter — measured while spelling,
@@ -110,7 +133,8 @@ final class SpeechBufferRenderer {
             self?.finish(timedOut: true)
         }
         self.watchdog = watchdog
-        queue.asyncAfter(deadline: .now() + delay + timeout, execute: watchdog)
+        let allowance = timeout(forCharacters: utterance.speechString.count)
+        queue.asyncAfter(deadline: .now() + delay + allowance, execute: watchdog)
 
         // Drive the synthesizer from the main thread, like the ordinary
         // speak() path — write-versus-speak should be the only difference.

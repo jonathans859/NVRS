@@ -78,6 +78,14 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(pauseFactor, forKey: "pauseFactor") }
     }
 
+    /// Longest utterance still worth rendering for shortening. Beyond it the
+    /// text goes to the system path instead — unshortened, and on a
+    /// different output path, so audibly louder. In the field because the
+    /// right ceiling depends on the device and the voice.
+    @Published var pauseCharacterLimit: Int {
+        didSet { defaults.set(pauseCharacterLimit, forKey: "pauseCharacterLimit") }
+    }
+
     /// Switch the phone voice when the PC synth/voice changes, using the
     /// mapping table (or same-language auto pick when unmapped).
     @Published var followPCVoice: Bool {
@@ -120,6 +128,8 @@ final class SettingsStore: ObservableObject {
         baseVolume = defaults.object(forKey: "baseVolume") as? Double ?? 1.0
         pauseMode = PauseMode(rawValue: defaults.integer(forKey: "pauseMode")) ?? .off
         pauseFactor = defaults.object(forKey: "pauseFactor") as? Double ?? 0.3
+        let storedLimit = defaults.integer(forKey: "pauseCharacterLimit")
+        pauseCharacterLimit = storedLimit == 0 ? 2000 : storedLimit
         followPCVoice = defaults.object(forKey: "followPCVoice") as? Bool ?? true
         followPCRate = defaults.object(forKey: "followPCRate") as? Bool ?? true
         if let data = defaults.data(forKey: "pcVoices"),

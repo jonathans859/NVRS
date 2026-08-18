@@ -43,17 +43,22 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// keystroke cancel do its job again.
     private let maxTypingBacklog = 6
     /// Above this, an utterance is spoken the ordinary way instead of being
-    /// rendered. Rendering costs about 5.7 ms per character (measured: 217
-    /// characters took 1232 ms), so 400 is roughly 2.3 s - inside the
-    /// renderer's 3 s watchdog, with headroom. Past that the render times
-    /// out and the text gets spoken this way regardless, after seconds of
-    /// silence; this just skips the wait. A 16,866-character utterance from
-    /// the field would have needed the better part of a minute.
+    /// rendered. It is there for text so long that rendering it whole cannot
+    /// finish in time: the pipeline is batch, so not one sample plays until
+    /// the last one has been rendered.
     ///
-    /// Provisional: it surrenders shortening on long text, which chunking
-    /// at sentence boundaries would keep. `longUtterancesSpokenPlain` says
-    /// how often it fires.
-    private let trimCharacterLimit = 400
+    /// The first value, 400, came from a single sample that said 5.7 ms per
+    /// character. 1425 field renders since say 0.3 ms per character at the
+    /// worst, so 400 was about 19x too cautious: it sent 76 utterances in one
+    /// session (longest 2917 characters) to the plain path, each of which
+    /// would have rendered in well under a second. They lost pause shortening
+    /// for nothing, and made the level difference between the two paths a
+    /// routine thing to hear rather than a rare one.
+    ///
+    /// Settable, so the ceiling can be found in the field instead of over a
+    /// TestFlight round trip. `longUtterancesSpokenPlain` says how often it
+    /// fires; the render statistics say what the renders cost.
+    var trimCharacterLimit = 2000
 
     /// Baselines, updated from Settings. Read on the main thread.
     var baseVoiceIdentifier: String?

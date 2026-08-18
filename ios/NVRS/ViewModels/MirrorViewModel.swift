@@ -241,6 +241,7 @@ final class MirrorViewModel: ObservableObject {
         // voice that won't render, so touching any setting is the way back.
         renderer.pauseMode = settings.pauseMode
         renderer.pauseFactor = settings.pauseFactor
+        renderer.trimCharacterLimit = settings.pauseCharacterLimit
     }
 
     /// The phone voice, honoring "follow PC voice": an explicit mapping
