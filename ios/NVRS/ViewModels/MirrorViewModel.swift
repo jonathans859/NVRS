@@ -42,7 +42,54 @@ final class MirrorViewModel: ObservableObject {
     /// Utterances that fell back to plain speak() because the render failed.
     @Published private(set) var trimFallbacks = 0
     @Published private(set) var lastTrimFailure: String?
+    /// The fallbacks split by cause. A hung render is heard as a stall; a
+    /// voice returning nothing is not. One timeout used to drag several of
+    /// the latter behind it, so the two counts climbing together is the
+    /// signature of a cascade rather than of independent failures.
+    @Published private(set) var trimTimeouts = 0
+    @Published private(set) var trimEmptyRenders = 0
+    /// What a render actually costs. The average says whether the voice is
+    /// keeping up at all; the slowest is the one that was audible as a gap.
+    @Published private(set) var rendersMeasured = 0
+    @Published private(set) var averageRenderSeconds = 0.0
+    @Published private(set) var slowestRenderSeconds = 0.0
+    /// How long the renderer had been quiet before the last render that
+    /// hung. A cold re-warm predicts a long gap here; anything else
+    /// predicts a short one — which is the whole point of recording it.
+    @Published private(set) var lastTimeoutIdleSeconds: Double?
+    private var totalRenderSeconds = 0.0
     private var probeToken = 0
+
+    /// The diagnostics section as plain lines. One source for both the
+    /// display and the copy button, so what lands in a bug report is
+    /// exactly what was on screen — the probe report does the same.
+    var diagnosticLines: [String] {
+        var lines = [
+            "Bytes \(bytesReceived), lines \(linesParsed), bad \(decodeFailures), received \(envelopesReceived), spoken \(utterancesStarted).",
+        ]
+        if let audioError {
+            lines.append("Audio session error: \(audioError)")
+        }
+        if audioResets > 0 {
+            lines.append("Audio graph reset \(audioResets) times; the speech it was playing was queued again.")
+        }
+        if typingCancelsHeld > 0 {
+            lines.append("Queued \(typingCancelsHeld) keystroke echoes instead of cutting them off.")
+        }
+        if trimFallbacks > 0 {
+            lines.append("Pause shortening fell back \(trimFallbacks) times. Last reason: \(lastTrimFailure ?? "unknown").")
+            lines.append("Of the failed renders, \(trimTimeouts) hung and \(trimEmptyRenders) came back empty.")
+            if let idle = lastTimeoutIdleSeconds {
+                lines.append(String(format: "Quiet for %.1f s before the last one hung.", idle))
+            }
+        }
+        if rendersMeasured > 0 {
+            let average = String(format: "%.0f", averageRenderSeconds * 1000)
+            let slowest = String(format: "%.0f", slowestRenderSeconds * 1000)
+            lines.append("Render \(average) ms average, \(slowest) ms slowest, over \(rendersMeasured) renders.")
+        }
+        return lines
+    }
 
     let settings: SettingsStore
     /// One engine for beeps, mirrored speech and the probe alike.
@@ -86,6 +133,19 @@ final class MirrorViewModel: ObservableObject {
         renderer.onTrimFailure = { [weak self] reason in
             self?.trimFallbacks += 1
             self?.lastTrimFailure = reason
+        }
+        renderer.onRenderOutcome = { [weak self] outcome in
+            guard let self else { return }
+            self.rendersMeasured += 1
+            self.totalRenderSeconds += outcome.renderSeconds
+            self.averageRenderSeconds = self.totalRenderSeconds / Double(self.rendersMeasured)
+            self.slowestRenderSeconds = max(self.slowestRenderSeconds, outcome.renderSeconds)
+            if outcome.timedOut {
+                self.trimTimeouts += 1
+                self.lastTimeoutIdleSeconds = outcome.idleSeconds
+            } else if outcome.failure != nil {
+                self.trimEmptyRenders += 1
+            }
         }
         renderer.onAudioReset = { [weak self] in
             self?.audioResets += 1

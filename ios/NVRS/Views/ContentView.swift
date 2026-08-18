@@ -66,20 +66,15 @@ struct ContentView: View {
                 }
 
                 Section {
-                    Text("Bytes \(viewModel.bytesReceived), lines \(viewModel.linesParsed), bad \(viewModel.decodeFailures), received \(viewModel.envelopesReceived), spoken \(viewModel.utterancesStarted).")
-                        .accessibilityAddTraits(.updatesFrequently)
-                    if let audioError = viewModel.audioError {
-                        Text("Audio session error: \(audioError)")
+                    ForEach(viewModel.diagnosticLines.indices, id: \.self) { index in
+                        Text(viewModel.diagnosticLines[index])
+                            .accessibilityAddTraits(.updatesFrequently)
                     }
-                    if viewModel.audioResets > 0 {
-                        Text("Audio graph reset \(viewModel.audioResets) times; the speech it was playing was queued again.")
+                    Button("Copy stats") {
+                        Clipboard.copy(statsText)
+                        Announce.post(String(localized: "Stats copied"))
                     }
-                    if viewModel.typingCancelsHeld > 0 {
-                        Text("Queued \(viewModel.typingCancelsHeld) keystroke echoes instead of cutting them off.")
-                    }
-                    if viewModel.trimFallbacks > 0 {
-                        Text("Pause shortening fell back \(viewModel.trimFallbacks) times. Last reason: \(viewModel.lastTrimFailure ?? "unknown").")
-                    }
+                    .accessibilityHint("Copies every diagnostic line, plus the build number, so it can be pasted into a bug report.")
                 } header: {
                     Text("Diagnostics")
                 }
@@ -95,6 +90,13 @@ struct ContentView: View {
         // Grouped is already the iOS default; on macOS it turns the bare
         // form into the familiar settings-style layout.
         .formStyle(.grouped)
+    }
+
+    /// Self-contained on purpose: pasted somewhere else, it still says which
+    /// build produced these numbers.
+    private var statsText: String {
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
+        return (["NVRS stats, build \(build)"] + viewModel.diagnosticLines).joined(separator: "\n")
     }
 
     private var pcMuteBinding: Binding<Bool> {
