@@ -31,6 +31,11 @@ final class TrimmedUtterancePlayer {
         /// heard as a stall, and they have different causes.
         var timedOut = false
         var idleSeconds: Double?
+        /// How long the utterance was. Paired with `renderSeconds` it gives
+        /// cost against real text, which is what a length-scaled timeout has
+        /// to be sized from - a flat one guillotines a long render that was
+        /// working perfectly well.
+        var characterCount = 0
         var analysis = SilenceTrimmer.Analysis()
     }
 
@@ -212,6 +217,7 @@ final class TrimmedUtterancePlayer {
         outcome.retried = result.retried
         outcome.timedOut = result.timedOut
         outcome.idleSeconds = result.idleSeconds
+        outcome.characterCount = job.utterance.speechString.count
 
         guard let rendered = result.buffer, result.failure == nil else {
             outcome.failure = result.failure ?? "voice returned no audio"

@@ -48,15 +48,23 @@ final class MirrorViewModel: ObservableObject {
     /// signature of a cascade rather than of independent failures.
     @Published private(set) var trimTimeouts = 0
     @Published private(set) var trimEmptyRenders = 0
-    /// What a render actually costs. The average says whether the voice is
-    /// keeping up at all; the slowest is the one that was audible as a gap.
-    @Published private(set) var rendersMeasured = 0
+    /// What a *healthy* render costs. Failures are excluded on purpose: a
+    /// timeout is pinned to the watchdog rather than to the voice, so
+    /// leaving it in hides the slowest render that actually succeeded -
+    /// which is the number a length-scaled timeout has to be sized against.
+    @Published private(set) var successfulRenders = 0
     @Published private(set) var averageRenderSeconds = 0.0
     @Published private(set) var slowestRenderSeconds = 0.0
+    /// Length of that slowest successful render, so its cost can be read
+    /// against the size of the text instead of guessed at.
+    @Published private(set) var slowestRenderCharacters = 0
     /// How long the renderer had been quiet before the last render that
     /// hung. A cold re-warm predicts a long gap here; anything else
     /// predicts a short one — which is the whole point of recording it.
     @Published private(set) var lastTimeoutIdleSeconds: Double?
+    /// Length of the utterance that hung. A long one points at the flat
+    /// timeout cutting off honest work; a short one points at a real stall.
+    @Published private(set) var lastTimeoutCharacters: Int?
     private var totalRenderSeconds = 0.0
     private var probeToken = 0
 
@@ -79,14 +87,21 @@ final class MirrorViewModel: ObservableObject {
         if trimFallbacks > 0 {
             lines.append("Pause shortening fell back \(trimFallbacks) times. Last reason: \(lastTrimFailure ?? "unknown").")
             lines.append("Of the failed renders, \(trimTimeouts) hung and \(trimEmptyRenders) came back empty.")
+            var hung: [String] = []
             if let idle = lastTimeoutIdleSeconds {
-                lines.append(String(format: "Quiet for %.1f s before the last one hung.", idle))
+                hung.append(String(format: "quiet for %.1f s", idle))
+            }
+            if let characters = lastTimeoutCharacters {
+                hung.append("\(characters) characters")
+            }
+            if !hung.isEmpty {
+                lines.append("Before the last one hung: \(hung.joined(separator: ", ")).")
             }
         }
-        if rendersMeasured > 0 {
+        if successfulRenders > 0 {
             let average = String(format: "%.0f", averageRenderSeconds * 1000)
             let slowest = String(format: "%.0f", slowestRenderSeconds * 1000)
-            lines.append("Render \(average) ms average, \(slowest) ms slowest, over \(rendersMeasured) renders.")
+            lines.append("Render \(average) ms average, \(slowest) ms slowest (\(slowestRenderCharacters) characters), over \(successfulRenders) successful renders.")
         }
         return lines
     }
@@ -136,15 +151,22 @@ final class MirrorViewModel: ObservableObject {
         }
         renderer.onRenderOutcome = { [weak self] outcome in
             guard let self else { return }
-            self.rendersMeasured += 1
-            self.totalRenderSeconds += outcome.renderSeconds
-            self.averageRenderSeconds = self.totalRenderSeconds / Double(self.rendersMeasured)
-            self.slowestRenderSeconds = max(self.slowestRenderSeconds, outcome.renderSeconds)
             if outcome.timedOut {
                 self.trimTimeouts += 1
                 self.lastTimeoutIdleSeconds = outcome.idleSeconds
-            } else if outcome.failure != nil {
+                self.lastTimeoutCharacters = outcome.characterCount
+                return
+            }
+            if outcome.failure != nil {
                 self.trimEmptyRenders += 1
+                return
+            }
+            self.successfulRenders += 1
+            self.totalRenderSeconds += outcome.renderSeconds
+            self.averageRenderSeconds = self.totalRenderSeconds / Double(self.successfulRenders)
+            if outcome.renderSeconds > self.slowestRenderSeconds {
+                self.slowestRenderSeconds = outcome.renderSeconds
+                self.slowestRenderCharacters = outcome.characterCount
             }
         }
         renderer.onAudioReset = { [weak self] in
