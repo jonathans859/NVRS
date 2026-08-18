@@ -42,6 +42,18 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// How far behind the PC we are willing to fall before letting a
     /// keystroke cancel do its job again.
     private let maxTypingBacklog = 6
+    /// Above this, an utterance is spoken the ordinary way instead of being
+    /// rendered. Rendering costs about 5.7 ms per character (measured: 217
+    /// characters took 1232 ms), so 400 is roughly 2.3 s - inside the
+    /// renderer's 3 s watchdog, with headroom. Past that the render times
+    /// out and the text gets spoken this way regardless, after seconds of
+    /// silence; this just skips the wait. A 16,866-character utterance from
+    /// the field would have needed the better part of a minute.
+    ///
+    /// Provisional: it surrenders shortening on long text, which chunking
+    /// at sentence boundaries would keep. `longUtterancesSpokenPlain` says
+    /// how often it fires.
+    private let trimCharacterLimit = 400
 
     /// Baselines, updated from Settings. Read on the main thread.
     var baseVoiceIdentifier: String?
@@ -63,6 +75,11 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
 
     /// Every render's cost and result, success or failure. Diagnostics only.
     var onRenderOutcome: ((TrimmedUtterancePlayer.Outcome) -> Void)?
+
+    /// An utterance was too long to render and went the plain way instead.
+    /// Carries its length. Diagnostics only - it says how much text is
+    /// losing pause shortening, i.e. whether chunking is worth building.
+    var onLongUtteranceSpokenPlain: ((Int) -> Void)?
 
     /// A keystroke cancel was held back so the letters could queue instead
     /// of swallowing each other. Diagnostics only.
@@ -265,10 +282,24 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         while let step = pending.first {
             switch step {
             case .utterance(let utterance):
+                let characters = utterance.speechString.count
+                if characters > trimCharacterLimit {
+                    // Like a beep, this plays on the system synthesizer and
+                    // must not overtake audio still scheduled ahead of it.
+                    guard trimmedPlayer.isIdle else { return }
+                    pending.removeFirst()
+                    onActivity?(true)
+                    lastEnqueuedBrief = false
+                    speaking = true
+                    synthesizer.speak(utterance)
+                    onLongUtteranceSpokenPlain?(characters)
+                    // didFinish resumes the trimmed pump.
+                    return
+                }
                 guard trimmedPlayer.canAcceptMore else { return }
                 pending.removeFirst()
                 onActivity?(true)
-                lastEnqueuedBrief = utterance.speechString.count <= briefCharacterLimit
+                lastEnqueuedBrief = characters <= briefCharacterLimit
                 trimmedPlayer.enqueue(utterance)
             case .beep(let hz, let ms, let pan):
                 // Beeps play on their own node the moment they are reached,
@@ -315,12 +346,22 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// a comfort feature, and losing a line of speech to it would be a bug
     /// worth more than the feature.
     private func handleTrimFailure(_ reason: String, returned: [AVSpeechUtterance]) {
-        trimFailureStreak += 1
-        if trimFailureStreak >= 3 {
-            // Otherwise every utterance pays a failed render before speaking.
-            disableTrimmingTemporarily(reason)
-        } else {
+        // The streak exists to catch a voice that cannot be rendered offline
+        // at all. A render that ran out of time on a big utterance says the
+        // text was long, not that the voice is unusable, so it must not cost
+        // the user the feature for a minute - which is what reading one long
+        // document used to do. Defence in depth now that oversized
+        // utterances no longer reach the renderer at all.
+        if (returned.first?.speechString.count ?? 0) > trimCharacterLimit {
             onTrimFailure?(reason)
+        } else {
+            trimFailureStreak += 1
+            if trimFailureStreak >= 3 {
+                // Otherwise every utterance pays a failed render before speaking.
+                disableTrimmingTemporarily(reason)
+            } else {
+                onTrimFailure?(reason)
+            }
         }
         for utterance in returned.reversed() {
             pending.insert(.utterance(utterance), at: 0)

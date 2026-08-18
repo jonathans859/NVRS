@@ -65,6 +65,10 @@ final class MirrorViewModel: ObservableObject {
     /// Length of the utterance that hung. A long one points at the flat
     /// timeout cutting off honest work; a short one points at a real stall.
     @Published private(set) var lastTimeoutCharacters: Int?
+    /// Utterances too long to render, spoken the plain way instead. Says
+    /// how much text is losing pause shortening to the length limit.
+    @Published private(set) var longUtterancesSpokenPlain = 0
+    @Published private(set) var longestPlainCharacters = 0
     private var totalRenderSeconds = 0.0
     private var probeToken = 0
 
@@ -97,6 +101,9 @@ final class MirrorViewModel: ObservableObject {
             if !hung.isEmpty {
                 lines.append("Before the last one hung: \(hung.joined(separator: ", ")).")
             }
+        }
+        if longUtterancesSpokenPlain > 0 {
+            lines.append("Spoke \(longUtterancesSpokenPlain) utterances the plain way for being too long (longest \(longestPlainCharacters) characters).")
         }
         if successfulRenders > 0 {
             let average = String(format: "%.0f", averageRenderSeconds * 1000)
@@ -168,6 +175,11 @@ final class MirrorViewModel: ObservableObject {
                 self.slowestRenderSeconds = outcome.renderSeconds
                 self.slowestRenderCharacters = outcome.characterCount
             }
+        }
+        renderer.onLongUtteranceSpokenPlain = { [weak self] characters in
+            guard let self else { return }
+            self.longUtterancesSpokenPlain += 1
+            self.longestPlainCharacters = max(self.longestPlainCharacters, characters)
         }
         renderer.onAudioReset = { [weak self] in
             self?.audioResets += 1
