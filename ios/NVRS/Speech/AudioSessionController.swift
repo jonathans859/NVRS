@@ -23,8 +23,8 @@ final class AudioSessionController {
 
 /// Manages the playback session across three modes:
 ///
-/// - `speaking`: mirrored speech is flowing — duck music, pause podcasts,
-///   low-latency IO buffer.
+/// - `speaking`: mirrored speech is flowing — low-latency IO buffer. Mixes
+///   with other audio like idle mode does; only the buffer differs.
 /// - `idleKeepAlive`: connected but quiet — session stays active and a
 ///   silent engine keeps rendering so iOS doesn't suspend the app (the
 ///   pocket use case). No ducking, and a long IO buffer (~10 wakeups/s)
@@ -112,12 +112,13 @@ final class AudioSessionController {
 
     private func enterSpeaking() {
         guard mode != .speaking else { return }
-        // Fallback ladder: never end up silent on the default session.
-        let ok = configure(
-            options: [.duckOthers, .interruptSpokenAudioAndMixWithOthers],
-            bufferDuration: speakingBufferDuration
-        )
-            || configure(options: [.duckOthers], bufferDuration: speakingBufferDuration)
+        // Mix, never duck (field-requested 2026-08-19). Ducking outlived the
+        // speech that caused it: the session only lapses back to idle
+        // options 120s after the renderer goes quiet, and a working NVDA
+        // session refreshes that timer constantly — so the duck was
+        // effectively permanent. Fallback ladder: never end up silent on
+        // the default session.
+        let ok = configure(options: [.mixWithOthers], bufferDuration: speakingBufferDuration)
             || configure(options: [], bufferDuration: speakingBufferDuration)
         if ok {
             mode = .speaking
