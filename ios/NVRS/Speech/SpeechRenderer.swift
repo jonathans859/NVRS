@@ -415,6 +415,16 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
             utterance.rate = mappedRate(state.rate)
             utterance.pitchMultiplier = mappedPitch(state.pitch)
             utterance.volume = mappedVolume(state.volume)
+            // EXPERIMENT (2026-08-19): does Eloquence's per-voice config —
+            // specifically the abbreviation dictionary VoiceOver can switch
+            // off — ride along with "use the assistive technology's
+            // settings"? Apple documents this as "assistive technology
+            // settings take precedence over the property values of this
+            // utterance" without saying which; WWDC20 names only voice, rate
+            // and pitch. While it is on, VoiceOver's voice and rate override
+            // ours, so NVDA's relative prosody offsets flatten. Diagnostic
+            // only — remove or gate it once the question is answered.
+            utterance.prefersAssistiveTechnologySettings = true
             if pendingDelayMs > 0 {
                 utterance.preUtteranceDelay = TimeInterval(pendingDelayMs) / 1000.0
                 pendingDelayMs = 0
