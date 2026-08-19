@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var viewModel: MirrorViewModel
+    @State private var isShowingDiagnostics = false
 
     var body: some View {
         #if os(iOS)
@@ -55,48 +56,37 @@ struct ContentView: View {
                 }
 
                 Section {
-                    Text(viewModel.lastSpoken.isEmpty ? "Nothing yet." : viewModel.lastSpoken)
-                        .accessibilityLabel(
-                            viewModel.lastSpoken.isEmpty
-                                ? "Last spoken: nothing yet"
-                                : "Last spoken: \(viewModel.lastSpoken)"
-                        )
+                    if viewModel.speechLog.isEmpty {
+                        Text("Nothing yet.")
+                    } else {
+                        ForEach(viewModel.speechLog) { line in
+                            Text(line.text)
+                        }
+                    }
                 } header: {
-                    Text("Last spoken")
+                    Text("Speech log")
+                } footer: {
+                    Text("Newest first, keeping the last \(settings.speechLogLimit) lines.")
                 }
 
                 Section {
-                    ForEach(viewModel.diagnosticLines.indices, id: \.self) { index in
-                        Text(viewModel.diagnosticLines[index])
-                            .accessibilityAddTraits(.updatesFrequently)
+                    Button("Diagnostics") {
+                        isShowingDiagnostics = true
                     }
-                    Button("Copy stats") {
-                        Clipboard.copy(statsText)
-                        Announce.post(String(localized: "Stats copied"))
-                    }
-                    .accessibilityHint("Copies every diagnostic line, plus the build number, so it can be pasted into a bug report.")
-                } header: {
-                    Text("Diagnostics")
-                }
-
-                Section {
+                    .accessibilityHint("Opens the counters for bytes, lines and speech, and the button that copies them.")
                     NavigationLink("Settings") {
                         SettingsView()
                     }
                 }
             }
             .navigationTitle("NVRS")
+            .sheet(isPresented: $isShowingDiagnostics) {
+                DiagnosticsView()
+            }
         }
         // Grouped is already the iOS default; on macOS it turns the bare
         // form into the familiar settings-style layout.
         .formStyle(.grouped)
-    }
-
-    /// Self-contained on purpose: pasted somewhere else, it still says which
-    /// build produced these numbers.
-    private var statsText: String {
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
-        return (["NVRS stats, build \(build)"] + viewModel.diagnosticLines).joined(separator: "\n")
     }
 
     private var pcMuteBinding: Binding<Bool> {

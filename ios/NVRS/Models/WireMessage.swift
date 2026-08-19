@@ -14,7 +14,7 @@ struct SpeechEnvelope: Decodable {
     let ts: Double
     let items: [WireItem]
 
-    /// Plain text of the envelope, for the transcript line and notification filters.
+    /// Plain text of the envelope, for the speech log.
     var plainText: String {
         var parts: [String] = []
         for item in items {

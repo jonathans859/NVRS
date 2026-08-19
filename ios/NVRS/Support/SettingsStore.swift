@@ -1,13 +1,6 @@
 import AVFoundation
 import Foundation
 
-struct NotificationFilter: Identifiable, Codable, Equatable {
-    var id = UUID()
-    var pattern: String
-    var isRegex = false
-    var isEnabled = true
-}
-
 /// A PC-side voice observed in synthConfig messages, optionally mapped to
 /// a specific iPhone voice.
 struct PCVoice: Identifiable, Codable, Equatable {
@@ -97,19 +90,16 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(followPCRate, forKey: "followPCRate") }
     }
 
+    /// How many spoken lines the log keeps. The oldest fall off the end.
+    @Published var speechLogLimit: Int {
+        didSet { defaults.set(speechLogLimit, forKey: "speechLogLimit") }
+    }
+
     /// PC voices seen so far, with optional per-voice phone mappings.
     @Published var pcVoices: [PCVoice] {
         didSet {
             if let data = try? JSONEncoder().encode(pcVoices) {
                 defaults.set(data, forKey: "pcVoices")
-            }
-        }
-    }
-
-    @Published var filters: [NotificationFilter] {
-        didSet {
-            if let data = try? JSONEncoder().encode(filters) {
-                defaults.set(data, forKey: "filters")
             }
         }
     }
@@ -132,17 +122,13 @@ final class SettingsStore: ObservableObject {
         pauseCharacterLimit = storedLimit == 0 ? 2000 : storedLimit
         followPCVoice = defaults.object(forKey: "followPCVoice") as? Bool ?? true
         followPCRate = defaults.object(forKey: "followPCRate") as? Bool ?? true
+        let storedLogLimit = defaults.integer(forKey: "speechLogLimit")
+        speechLogLimit = storedLogLimit == 0 ? 50 : storedLogLimit
         if let data = defaults.data(forKey: "pcVoices"),
            let stored = try? JSONDecoder().decode([PCVoice].self, from: data) {
             pcVoices = stored
         } else {
             pcVoices = []
-        }
-        if let data = defaults.data(forKey: "filters"),
-           let stored = try? JSONDecoder().decode([NotificationFilter].self, from: data) {
-            filters = stored
-        } else {
-            filters = []
         }
     }
 

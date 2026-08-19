@@ -7,10 +7,18 @@ import UIKit
 import AppKit
 #endif
 
+/// One mirrored line. Carries an identity so the list keeps its place
+/// while new speech arrives at the top.
+struct SpokenLine: Identifiable {
+    let id = UUID()
+    let text: String
+}
+
 @MainActor
 final class MirrorViewModel: ObservableObject {
     @Published private(set) var connectionState: TransportState = .idle
-    @Published private(set) var lastSpoken: String = ""
+    /// Everything mirrored so far, newest first, capped at the user's limit.
+    @Published private(set) var speechLog: [SpokenLine] = []
     @Published private(set) var pcSynthDescription: String?
     @Published private(set) var pcConfig: SynthConfig?
     @Published var isConnectEnabled = false
@@ -120,7 +128,6 @@ final class MirrorViewModel: ObservableObject {
     private let renderProbe: OfflineRenderProbe
     private let soundPlayer = SoundPlayer()
     private let audioSession = AudioSessionController()
-    private let filterEngine = NotificationFilterEngine()
     private var transport: SpeechTransport?
     private var cancellables: Set<AnyCancellable> = []
 
@@ -212,15 +219,14 @@ final class MirrorViewModel: ObservableObject {
         }
         #endif
         applyBaselines()
-        filterEngine.filters = settings.filters
-        // React to settings changes: update baselines/filters live.
+        // React to settings changes: update baselines live.
         settings.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.applyBaselines()
-                    self.filterEngine.filters = self.settings.filters
+                    self.trimSpeechLog()
                     self.audioSession.setKeepAliveWanted(
                         self.settings.keepAliveInBackground && self.isConnectEnabled
                     )
@@ -502,9 +508,8 @@ final class MirrorViewModel: ObservableObject {
             envelopesReceived += 1
             let text = envelope.plainText
             if !text.isEmpty {
-                lastSpoken = text
+                appendToLog(text)
             }
-            filterEngine.process(text)
             if !isLocalSpeechMuted {
                 audioSession.speechActivity()
                 audioError = audioSession.lastError
@@ -550,6 +555,20 @@ final class MirrorViewModel: ObservableObject {
             applyBaselines()
         case .unknown:
             break
+        }
+    }
+
+    private func appendToLog(_ text: String) {
+        speechLog.insert(SpokenLine(text: text), at: 0)
+        trimSpeechLog()
+    }
+
+    /// Also runs when the limit setting changes, so lowering it takes
+    /// effect on what is already on screen.
+    private func trimSpeechLog() {
+        let limit = max(1, settings.speechLogLimit)
+        if speechLog.count > limit {
+            speechLog.removeLast(speechLog.count - limit)
         }
     }
 

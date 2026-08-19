@@ -9,7 +9,7 @@ Two parts, one repo:
 | Path | What |
 |---|---|
 | `addon/` | NVDA add-on (Python, stdlib only): captures every speech sequence via `speech.extensions.pre_speechQueued` (SayAll included), serializes it as NDJSON, serves it over TCP bound to the Tailscale interface. |
-| `ios/` | SwiftUI app: connects out, reconstructs speech with `AVSpeechSynthesizer` (pitch/rate/volume offsets, language switches, spelling mode, breaks, capital beeps), plays in the background, posts notifications on matching text. |
+| `ios/` | SwiftUI app: connects out, reconstructs speech with `AVSpeechSynthesizer` (pitch/rate/volume offsets, language switches, spelling mode, breaks, capital beeps), plays in the background, keeps a capped log of what was spoken. |
 
 The wire format is documented in [PROTOCOL.md](PROTOCOL.md). The transport
 is abstracted on both sides (`SpeechTransport`), so a relay (e.g. WSS via a

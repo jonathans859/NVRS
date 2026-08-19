@@ -80,11 +80,11 @@ struct SettingsView: View {
             }
 
             Section {
-                NavigationLink("Notification filters") {
-                    FiltersView()
-                }
+                logLimitSlider
+            } header: {
+                Text("Speech log")
             } footer: {
-                Text("Get a notification when NVDA speaks matching text, even while other audio plays.")
+                Text("How many spoken lines the main screen keeps. The oldest fall off the end.")
             }
         }
         .navigationTitle("Settings")
@@ -130,6 +130,20 @@ struct SettingsView: View {
         Binding(
             get: { Double(settings.pauseCharacterLimit) },
             set: { settings.pauseCharacterLimit = Int($0) }
+        )
+    }
+
+    private var logLimitSlider: some View {
+        Slider(value: logLimitBinding, in: 10...500, step: 10) {
+            Text("Lines to keep")
+        }
+        .accessibilityValue("\(settings.speechLogLimit) lines")
+    }
+
+    private var logLimitBinding: Binding<Double> {
+        Binding(
+            get: { Double(settings.speechLogLimit) },
+            set: { settings.speechLogLimit = Int($0) }
         )
     }
 
