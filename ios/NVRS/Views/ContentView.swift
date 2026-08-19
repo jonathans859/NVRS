@@ -1,9 +1,9 @@
 import SwiftUI
 
 struct ContentView: View {
-    @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var viewModel: MirrorViewModel
     @State private var isShowingDiagnostics = false
+    @State private var isShowingSpeechLog = false
 
     var body: some View {
         #if os(iOS)
@@ -56,20 +56,10 @@ struct ContentView: View {
                 }
 
                 Section {
-                    if viewModel.speechLog.isEmpty {
-                        Text("Nothing yet.")
-                    } else {
-                        ForEach(viewModel.speechLog) { line in
-                            Text(line.text)
-                        }
+                    Button("Speech log") {
+                        isShowingSpeechLog = true
                     }
-                } header: {
-                    Text("Speech log")
-                } footer: {
-                    Text("Newest first, keeping the last \(settings.speechLogLimit) lines.")
-                }
-
-                Section {
+                    .accessibilityHint("Opens the last spoken lines, newest first.")
                     Button("Diagnostics") {
                         isShowingDiagnostics = true
                     }
@@ -80,6 +70,9 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("NVRS")
+            .sheet(isPresented: $isShowingSpeechLog) {
+                SpeechLogView()
+            }
             .sheet(isPresented: $isShowingDiagnostics) {
                 DiagnosticsView()
             }
