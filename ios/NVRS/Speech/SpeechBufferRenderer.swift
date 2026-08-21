@@ -68,14 +68,18 @@ final class SpeechBufferRenderer {
     private let minimumWriteGap: TimeInterval = 0.03
     private let retryDelay: TimeInterval = 0.08
 
-    /// A write we aborted needs a moment before the synthesizer is usable
-    /// again; asking for the next render inside that window risks exactly
-    /// the empty result the abort exists to prevent. Not measured — the
-    /// retry above remains the real safety net.
+    /// The render after an aborted write goes to a synthesizer built seconds
+    /// ago, so it is cold as well as new; this gives it a moment before the
+    /// next write lands on it. Not measured — the retry above remains the
+    /// real safety net, and the length-scaled allowance already carries
+    /// enough headroom for a cold render (3x a warm one, against a floor of
+    /// 5x) that a fresh instance should not time out on arrival.
     private let abortSettleGap: TimeInterval = 0.12
 
     private let queue = DispatchQueue(label: "com.jonathan859.nvrs.bufferrender")
-    private let synthesizer = AVSpeechSynthesizer()
+    /// Replaced outright whenever a write hangs, so it is main-queue-only:
+    /// every read and the one write below happen there.
+    private var synthesizer = AVSpeechSynthesizer()
 
     private var busy = false
     private var buffers: [AVAudioPCMBuffer] = []
@@ -180,15 +184,28 @@ final class SpeechBufferRenderer {
         finishedAt = CFAbsoluteTimeGetCurrent()
 
         if timedOut {
-            // The write that never came back still holds the synthesizer,
-            // and a fresh write() issued against a busy one returns nothing
-            // at all — which is how a single timeout became a run of failed
-            // renders and a stretch of unshortened pauses. Let go of it here
-            // instead of leaving it for the next utterance to trip over.
+            // The write that never came back still holds the synthesizer, and
+            // a fresh write() issued against a busy one returns nothing at all
+            // — which is how a single timeout became a run of failed renders
+            // and a stretch of unshortened pauses.
+            //
+            // stopSpeaking() was the first attempt at letting go of it, and
+            // the field says it does not work: build 36 logged a session where
+            // the successful-render count froze the moment the first write
+            // hung and never moved again, while every later render timed out,
+            // including one-character ones. write() has no cancel, and a
+            // wedged instance stays wedged for the life of the process —
+            // which is why the only cure anyone found was restarting the app.
+            //
+            // So throw the instance away instead. Late buffers from the dead
+            // one are already ignored by `writeToken`, and it is released once
+            // its write returns, if it ever does — a synthesizer leaked per
+            // hang is a far smaller price than losing shortening until relaunch.
             abortedWrite = true
-            let synthesizer = self.synthesizer
-            DispatchQueue.main.async {
-                synthesizer.stopSpeaking(at: .immediate)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.synthesizer.stopSpeaking(at: .immediate)
+                self.synthesizer = AVSpeechSynthesizer()
             }
         }
 
