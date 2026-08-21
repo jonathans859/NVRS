@@ -28,12 +28,6 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     private var pending: [Step] = []
     private var speaking = false
     private var voiceCache: [String: AVSpeechSynthesisVoice?] = [:]
-    /// Consecutive failed renders. A voice that can't be rendered offline
-    /// must not cost every utterance a failed attempt, so trimming switches
-    /// itself off until the user changes the setting again.
-    private var trimFailureStreak = 0
-    private var trimDisabled = false
-    private var trimRearm: DispatchWorkItem?
     private var isPaused = false
     /// The last utterance handed to a player was a keystroke echo.
     private var lastEnqueuedBrief = false
@@ -97,12 +91,7 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// Pause shortening. `.off` keeps the plain `speak()` path, so the
     /// default behaviour is byte-for-byte what it was.
     var pauseMode: PauseMode = .off {
-        didSet {
-            trimmedPlayer.mode = pauseMode
-            trimFailureStreak = 0
-            trimDisabled = false
-            trimRearm?.cancel()
-        }
+        didSet { trimmedPlayer.mode = pauseMode }
     }
 
     var pauseFactor: Double = 0.3 {
@@ -110,7 +99,7 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     private var trimmingActive: Bool {
-        pauseMode != .off && !trimDisabled
+        pauseMode != .off
     }
 
     init(host: AudioEngineHost) {
@@ -128,9 +117,6 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
             self?.speakNextIfIdle()
         }
         trimmedPlayer.onOutcome = { [weak self] outcome in
-            if outcome.failure == nil {
-                self?.trimFailureStreak = 0
-            }
             self?.onRenderOutcome?(outcome)
         }
         trimmedPlayer.onFailure = { [weak self] reason, returned in
@@ -319,21 +305,6 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
-    /// Turning shortening off for good on a run of failures cost the user
-    /// the feature until they restarted the app — a heavy price for what is
-    /// usually a transient. Off for a minute, then it tries again.
-    private func disableTrimmingTemporarily(_ reason: String) {
-        trimDisabled = true
-        trimFailureStreak = 0
-        onTrimFailure?("\(reason) — pause shortening off for a minute")
-        trimRearm?.cancel()
-        let rearm = DispatchWorkItem { [weak self] in
-            self?.trimDisabled = false
-        }
-        trimRearm = rearm
-        DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: rearm)
-    }
-
     /// A route change or session reconfiguration took the audio graph down
     /// with speech still scheduled on it. Put the lost utterances back at the
     /// front and carry on: nothing about this is the voice's fault, so it
@@ -351,23 +322,14 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// a comfort feature, and losing a line of speech to it would be a bug
     /// worth more than the feature.
     private func handleTrimFailure(_ reason: String, returned: [AVSpeechUtterance]) {
-        // The streak exists to catch a voice that cannot be rendered offline
-        // at all. A render that ran out of time on a big utterance says the
-        // text was long, not that the voice is unusable, so it must not cost
-        // the user the feature for a minute - which is what reading one long
-        // document used to do. Defence in depth now that oversized
-        // utterances no longer reach the renderer at all.
-        if (returned.first?.speechString.count ?? 0) > trimCharacterLimit {
-            onTrimFailure?(reason)
-        } else {
-            trimFailureStreak += 1
-            if trimFailureStreak >= 3 {
-                // Otherwise every utterance pays a failed render before speaking.
-                disableTrimmingTemporarily(reason)
-            } else {
-                onTrimFailure?(reason)
-            }
-        }
+        // A run of failures used to switch shortening off for a minute, on the
+        // theory that the alternative was every utterance paying a failed
+        // render. The real cause of those runs was a wedged synthesizer that
+        // no amount of waiting fixed, and the renderer now replaces it instead
+        // (see SpeechBufferRenderer.finish). With the wedge repaired at its
+        // source there is nothing for a cooldown to wait out, so each failure
+        // now costs one utterance and nothing more.
+        onTrimFailure?(reason)
         for utterance in returned.reversed() {
             pending.insert(.utterance(utterance), at: 0)
         }
