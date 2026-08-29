@@ -1,5 +1,22 @@
 name: TestFlight
 
+# Every push touching ios/ builds both platforms and uploads them to TestFlight.
+# The internal group "Core" has automatic distribution enabled, so builds reach
+# testers as soon as App Store Connect finishes processing.
+#
+# Both platforms share ONE App Store Connect app record (universal purchase):
+# the iOS and macOS targets use the same bundle id, and the record must have the
+# macOS platform added before the first macOS upload. asc infers the platform
+# from the file it is given (.ipa vs .pkg), so nothing has to disambiguate it.
+#
+# The pipeline itself lives in jonathans859/apple-ci, shared with every app on
+# this Apple account: archive, export, upload, versioning and the one shared
+# Apple Development certificate are defined once there rather than six times.
+#
+# iOS and macOS live in SEPARATE Xcode projects on purpose -- gym reads build
+# settings through the wrong scheme in a multi-scheme project and packages the
+# Mac export as an ipa. One XcodeGen spec per platform avoids it entirely.
+
 on:
   push:
     branches: [main]
@@ -8,106 +25,33 @@ on:
       - ".github/workflows/ios-testflight.yml"
   workflow_dispatch:
 
-# Serialize uploads; a superseded run is safe to cancel (its build number
-# is never reused - see BUILD_NUMBER below). The iOS and macOS jobs of one
-# run may overlap: they target different ASC platforms.
+# Serialize uploads against the one app record. The iOS and macOS jobs of a
+# single run may safely overlap: App Store Connect processes them independently.
 concurrency:
   group: ios-testflight
   cancel-in-progress: true
 
 jobs:
-  testflight-ios:
-    # ASC enforces an SDK floor on uploads (2026: iOS 26 SDK -> macos-26).
-    runs-on: macos-26
-    timeout-minutes: 45
-    defaults:
-      run:
-        working-directory: ios
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # commit-count build numbers
+  ios:
+    uses: jonathans859/apple-ci/.github/workflows/testflight.yml@v1
+    secrets: inherit
+    with:
+      platform: ios
+      working-directory: ios
+      project: NVRS.xcodeproj
+      scheme: NVRS
+      xcodegen-spec: project.yml
+      app-id: "6792317849"
+      artifact-name: NVRS-ipa
 
-      - name: Select newest Xcode
-        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
-
-      - name: Generate Xcode project
-        run: |
-          brew install xcodegen
-          xcodegen generate
-
-      - uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.3"
-          # No bundler-cache: repo has no Gemfile.lock (authored on Windows).
-
-      - name: Install fastlane
-        run: bundle install
-
-      - name: Compute build number
-        run: echo "BUILD_NUMBER=$(git rev-list --count HEAD).1.${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
-
-      - name: Build and upload to TestFlight
-        env:
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_DEV_CERT_P12: ${{ secrets.APPLE_DEV_CERT_P12 }}
-          APPLE_DEV_CERT_P12_PASSWORD: ${{ secrets.APPLE_DEV_CERT_P12_PASSWORD }}
-          CHANGELOG: ${{ github.event.head_commit.message }}
-        run: bundle exec fastlane ios beta
-
-      - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: NVRS-ipa
-          path: ios/build/NVRS.ipa
-
-  testflight-macos:
-    runs-on: macos-26
-    timeout-minutes: 45
-    defaults:
-      run:
-        working-directory: ios
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # commit-count build numbers
-
-      - name: Select newest Xcode
-        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
-
-      - name: Generate Xcode project
-        run: |
-          brew install xcodegen
-          xcodegen generate --spec project-mac.yml
-
-      - uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.3"
-
-      - name: Install fastlane
-        run: bundle install
-
-      - name: Compute build number
-        run: echo "BUILD_NUMBER=$(git rev-list --count HEAD).1.${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
-
-      - name: Build and upload to TestFlight
-        env:
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_DEV_CERT_P12: ${{ secrets.APPLE_DEV_CERT_P12 }}
-          APPLE_DEV_CERT_P12_PASSWORD: ${{ secrets.APPLE_DEV_CERT_P12_PASSWORD }}
-          CHANGELOG: ${{ github.event.head_commit.message }}
-        run: bundle exec fastlane mac beta
-
-      - name: Upload pkg artifact
-        uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: NVRS-mac-pkg
-          path: ios/build/NVRS.pkg
+  macos:
+    uses: jonathans859/apple-ci/.github/workflows/testflight.yml@v1
+    secrets: inherit
+    with:
+      platform: macos
+      working-directory: ios
+      project: NVRSMac.xcodeproj
+      scheme: NVRSMac
+      xcodegen-spec: project-mac.yml
+      app-id: "6792317849"
+      artifact-name: NVRS-mac-pkg
