@@ -21,8 +21,10 @@ on:
   push:
     branches: [main]
     paths:
+      # Deliberately no self-reference: a CI-only edit should not mint a
+      # tester-visible build with no app change. Safe because the pipeline
+      # itself lives in jonathans859/apple-ci and is exercised there.
       - "ios/**"
-      - ".github/workflows/ios-testflight.yml"
   workflow_dispatch:
 
 # Serialize uploads against the one app record. The iOS and macOS jobs of a
