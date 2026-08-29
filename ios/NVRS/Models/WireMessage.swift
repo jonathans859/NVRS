@@ -109,6 +109,20 @@ enum WireItem: Decodable {
     }
 }
 
+/// The wire contract, versioned independently of either half's marketing
+/// version. The add-on ships its own version and the app ships its own; what has
+/// to agree is this number.
+///
+/// Bumped ONLY for breaking changes -- a removed or redefined field, or a change
+/// to the framing. Additive changes (a new field, a new control message "type")
+/// must NOT bump it, because both ends ignore what they do not recognise, and
+/// that rule is what keeps this number stable enough to be worth checking.
+enum WireProtocol {
+    static let version = 1
+    /// Oldest add-on protocol this app still speaks.
+    static let minimum = 1
+}
+
 enum ServerMessage {
     case speech(SpeechEnvelope)
     case cancel
@@ -126,6 +140,14 @@ enum ServerMessage {
     /// NVDA's shift-key pause/resume. It reaches the PC's synth driver
     /// rather than the speech sequence, so it travels as its own message.
     case pause(Bool)
+    /// Sent by the add-on immediately after a successful handshake, before any
+    /// speech. An add-on that predates protocol versioning sends nothing here --
+    /// absence therefore means protocol 1, and must never be treated as a fault.
+    case hello(protocol: Int, minProtocol: Int, server: String?)
+    /// The add-on refusing us, with a reason, before it closes the socket. A
+    /// silent close would be indistinguishable from a wrong shared secret, a
+    /// firewall, or Tailscale being down.
+    case error(code: String, message: String)
     case unknown
 }
 
@@ -164,6 +186,25 @@ private struct BeepMessage: Decodable {
     let right: Double?
 }
 
+private struct HelloMessage: Decodable {
+    let protocolVersion: Int?
+    let minProtocol: Int?
+    let server: String?
+
+    private enum CodingKeys: String, CodingKey {
+        // "protocol" is a Swift keyword in this position; map it explicitly
+        // rather than back-ticking it everywhere it is used.
+        case protocolVersion = "protocol"
+        case minProtocol
+        case server
+    }
+}
+
+private struct ErrorMessage: Decodable {
+    let code: String?
+    let message: String?
+}
+
 enum WireParser {
     private struct Probe: Decodable {
         let type: String?
@@ -193,6 +234,16 @@ enum WireParser {
             return .wave(name: name)
         case "pause":
             return .pause((try? decoder.decode(PauseMessage.self, from: data))?.paused ?? true)
+        case "hello":
+            guard let hello = try? decoder.decode(HelloMessage.self, from: data) else { return .unknown }
+            return .hello(
+                protocol: hello.protocolVersion ?? 1,
+                minProtocol: hello.minProtocol ?? hello.protocolVersion ?? 1,
+                server: hello.server
+            )
+        case "error":
+            guard let err = try? decoder.decode(ErrorMessage.self, from: data) else { return .unknown }
+            return .error(code: err.code ?? "unknown", message: err.message ?? "")
         case "pcMute":
             return (try? decoder.decode(PCMuteMessage.self, from: data)).map {
                 .pcMute(muted: $0.muted ?? false, allowed: $0.allowed ?? false)

@@ -114,7 +114,15 @@ final class TCPSpeechTransport: SpeechTransport {
     }
 
     private func sendAuth(on conn: NWConnection) {
-        sendLine(["auth": secret], on: conn)
+        // The extra keys are additive: an add-on that predates protocol
+        // versioning reads "auth" and ignores the rest, so this is safe to send
+        // to every add-on already installed.
+        sendLine([
+            "auth": secret,
+            "protocol": WireProtocol.version,
+            "minProtocol": WireProtocol.minimum,
+            "client": "NVRS app",
+        ], on: conn)
     }
 
     /// One NDJSON line up the same socket the add-on streams down.

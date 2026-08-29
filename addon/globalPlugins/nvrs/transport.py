@@ -23,6 +23,15 @@ BIND_RETRY_SEC = 10
 MAX_CLIENT_LINE_BYTES = 4096
 
 
+#: Wire-protocol version. Bumped ONLY for breaking changes -- a removed or
+#: redefined field, or a change to the framing. Additive changes (a new field, a
+#: new control message "type") must NOT bump it, because both ends ignore what they
+#: do not recognise; that rule is what keeps this number stable enough to be worth
+#: checking at all.
+PROTOCOL_VERSION = 1
+#: Oldest peer protocol this add-on still speaks.
+MIN_PROTOCOL_VERSION = 1
+
 def detectTailscaleIP():
 	"""Best-effort detection of this machine's Tailscale IPv4 address.
 	Returns None when Tailscale is down or not installed.
@@ -60,6 +69,12 @@ class SpeechTransport:
 	#: Called with one decoded dict from an arbitrary thread for every
 	#: control message a listener sends us after the handshake.
 	onClientMessage = None
+	#: Called with a human-readable reason when a peer is refused for speaking
+	#: an incompatible protocol. The transport has no business talking to the
+	#: user, but the user is the only one who can fix it -- so it hands the
+	#: message up to the plugin, which reports it through NVDA.
+	onProtocolMismatch = None
+
 
 	def start(self):
 		raise NotImplementedError
@@ -240,10 +255,34 @@ class TcpServerTransport(SpeechTransport):
 		client = _Client(sock, addr)
 		try:
 			sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-			if not self._authenticate(sock):
+			payload = self._authenticate(sock)
+			if payload is None:
 				log.warning("NVRS: rejected connection from %s (bad auth)" % (addr[0],))
 				client.close()
 				return
+			refusal = self._protocolRefusal(payload)
+			if refusal is not None:
+				# Say why, THEN close. A silent close is indistinguishable from a
+				# wrong secret, a firewall, or Tailscale being down, and the user
+				# would go looking at the wrong problem entirely.
+				self._sendLine(sock, {"type": "error", "code": "protocol", "message": refusal})
+				log.warning("NVRS: refused %s -- %s" % (addr[0], refusal))
+				client.close()
+				callback = self.onProtocolMismatch
+				if callback:
+					try:
+						callback(refusal)
+					except Exception:
+						log.error("NVRS: onProtocolMismatch failed", exc_info=True)
+				return
+			# Before anything else, so a version-aware app knows what it is talking
+			# to. An older app ignores an unrecognised "type" and is unaffected.
+			self._sendLine(sock, {
+				"type": "hello",
+				"protocol": PROTOCOL_VERSION,
+				"minProtocol": MIN_PROTOCOL_VERSION,
+				"server": "NVRS add-on",
+			})
 		except OSError:
 			client.close()
 			return
@@ -275,27 +314,64 @@ class TcpServerTransport(SpeechTransport):
 					log.error("NVRS: onListenerDisconnected failed", exc_info=True)
 
 	def _authenticate(self, sock):
+		"""Read the handshake line. Returns the parsed payload, or None if the
+		secret is wrong or the line is unusable."""
 		if not self._secret:
 			# No secret configured: refuse everything rather than stream openly.
-			return False
+			return None
 		sock.settimeout(AUTH_TIMEOUT_SEC)
 		line = b""
 		while b"\n" not in line:
 			if len(line) > 4096:
-				return False
+				return None
 			chunk = sock.recv(1024)
 			if not chunk:
-				return False
+				return None
 			line += chunk
 		sock.settimeout(None)
 		try:
 			payload = json.loads(line.split(b"\n", 1)[0].decode("utf-8"))
 			supplied = payload.get("auth", "")
 		except (ValueError, AttributeError, UnicodeDecodeError):
-			return False
+			return None
 		if not isinstance(supplied, str):
-			return False
-		return hmac.compare_digest(supplied.encode("utf-8"), self._secret.encode("utf-8"))
+			return None
+		if not hmac.compare_digest(supplied.encode("utf-8"), self._secret.encode("utf-8")):
+			return None
+		return payload if isinstance(payload, dict) else {}
+
+	def _sendLine(self, sock, message):
+		"""One NDJSON line straight down the socket, outside the sender queue --
+		used for the hello and for refusals, which must be ordered before anything
+		else and must survive the client never being enqueued."""
+		try:
+			text = json.dumps(message, separators=(",", ":"), ensure_ascii=False) + "\n"
+			sock.sendall(text.encode("utf-8"))
+		except OSError:
+			pass
+
+	def _protocolRefusal(self, payload):
+		"""None if the peer is compatible, else a message naming which half is out
+		of date. A handshake with no "protocol" key predates versioning entirely and
+		is treated as protocol 1 -- without that, the first version-aware add-on
+		would refuse every app already installed."""
+		peer = payload.get("protocol", 1)
+		peerMin = payload.get("minProtocol", peer)
+		if not isinstance(peer, int) or not isinstance(peerMin, int):
+			return "The NVRS app sent a handshake this add-on could not read."
+		if peer < MIN_PROTOCOL_VERSION:
+			return (
+				"The NVRS app on your device is too old for this add-on (app speaks "
+				"protocol %d, this add-on needs at least %d). Update the app from "
+				"TestFlight." % (peer, MIN_PROTOCOL_VERSION)
+			)
+		if peerMin > PROTOCOL_VERSION:
+			return (
+				"This NVRS add-on is too old for the app on your device (add-on speaks "
+				"protocol %d, the app needs at least %d). Update the add-on from "
+				"github.com/jonathans859/NVRS/releases." % (PROTOCOL_VERSION, peerMin)
+			)
+		return None
 
 	def _senderLoop(self, client):
 		sent = 0

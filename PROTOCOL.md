@@ -5,17 +5,57 @@ listens on the Tailscale interface; the iOS app connects out to
 `<tailscale-ip>:<port>` (default port **6877**). UTF-8 throughout; one JSON
 object per line.
 
+## Versioning
+
+The protocol version is a single integer, versioned **independently of either
+half's release version**: the add-on and the app ship on their own schedules, and
+what has to agree is this wire contract, not their marketing numbers.
+
+It is bumped **only for breaking changes** — a removed or redefined field, or a
+change to the framing. Additive changes (a new field, a new control message
+`type`) must **not** bump it, because:
+
+> **Both ends ignore what they do not recognise.** Unknown top-level `type`
+> values and unknown keys are skipped, never treated as errors.
+
+That rule is what keeps the number stable enough to be worth checking.
+
+Current version: **1**. Both halves also declare the oldest version they still
+speak; peers are compatible when the two ranges overlap.
+
 ## Handshake
 
 First line from the client:
 
 ```json
-{"auth": "<shared secret>"}
+{"auth": "<shared secret>", "protocol": 1, "minProtocol": 1, "client": "NVRS app"}
 ```
 
 The add-on closes the connection unless the secret matches (constant-time
-comparison). Immediately after a successful handshake the add-on sends the
-current `synthConfig` and the current `pcMute` state.
+comparison).
+
+**A handshake with no `protocol` key means protocol 1.** Versions of the app
+predating this section sent only `auth`, and must keep working.
+
+If the versions are incompatible the add-on sends an error and *then* closes:
+
+```json
+{"type": "error", "code": "protocol", "message": "<which half to update, and where from>"}
+```
+
+The message says which side is out of date, because that is the only actionable
+part. Closing silently would be indistinguishable from a wrong shared secret, a
+firewall, or Tailscale being down.
+
+Otherwise the add-on replies first with:
+
+```json
+{"type": "hello", "protocol": 1, "minProtocol": 1, "server": "NVRS add-on"}
+```
+
+**No `hello` means protocol 1** — add-ons predating this section send none, and
+an app must not treat that silence as a fault. Immediately after, the add-on
+sends the current `synthConfig` and the current `pcMute` state.
 
 ## Server → client messages
 

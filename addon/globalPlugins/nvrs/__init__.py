@@ -233,6 +233,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		else:
 			self._sendPCMuteState()
 
+	def _onProtocolMismatch(self, reason):
+		# Reported on the PC, not just to the phone: when the add-on is the old
+		# half, this is the machine where the update has to happen, and the user
+		# cannot see the phone's screen either way.
+		wx.CallAfter(ui.message, _("NVRS: %s") % reason)
+		log.warning("NVRS: protocol mismatch -- %s" % reason)
+
 	def _onListenerDisconnected(self):
 		wx.CallAfter(self._onListenerDisconnectedMain)
 
@@ -333,6 +340,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		)
 		self._transport.onListenerConnected = self._onListenerConnected
 		self._transport.onListenerDisconnected = self._onListenerDisconnected
+		self._transport.onProtocolMismatch = self._onProtocolMismatch
 		self._transport.onClientMessage = self._onClientMessage
 		self._lastSynthConfig = None
 		self._transport.start()

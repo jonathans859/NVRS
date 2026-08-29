@@ -35,6 +35,10 @@ final class MirrorViewModel: ObservableObject {
     @Published private(set) var envelopesReceived = 0
     @Published private(set) var utterancesStarted = 0
     @Published private(set) var audioError: String?
+    /// Why the add-on refused us, or why we refused it: a protocol mismatch
+    /// between the two halves. Distinct from a transport failure, because the
+    /// fix is "update one side", not "check the network".
+    @Published private(set) var compatibilityProblem: String?
     @Published private(set) var bytesReceived = 0
     @Published private(set) var linesParsed = 0
     @Published private(set) var decodeFailures = 0
@@ -553,9 +557,41 @@ final class MirrorViewModel: ObservableObject {
             recordPCVoice(config)
             // Re-derive voice/rate in case "follow PC" settings are on.
             applyBaselines()
+        case .hello(let peer, let peerMin, _):
+            // Compatible when the two supported ranges overlap. An add-on that
+            // predates versioning sends no hello at all, so silence is protocol 1
+            // and never a fault -- otherwise this app would refuse every add-on
+            // already installed.
+            if peer < WireProtocol.minimum {
+                reportIncompatible(
+                    String(
+                        localized: "The NVRS add-on on your PC is too old for this app. Update it from github.com/jonathans859/NVRS/releases."
+                    )
+                )
+            } else if peerMin > WireProtocol.version {
+                reportIncompatible(
+                    String(
+                        localized: "This app is too old for the NVRS add-on on your PC. Update the app from TestFlight."
+                    )
+                )
+            }
+        case .error(_, let message):
+            // The add-on refusing us, with its reason, before it closes.
+            reportIncompatible(message)
         case .unknown:
             break
         }
+    }
+
+    /// Says which half is out of date -- aloud, because this is a speech app for
+    /// people who cannot read a banner, and a version mismatch is otherwise
+    /// indistinguishable from "it just stopped working".
+    private func reportIncompatible(_ message: String) {
+        compatibilityProblem = message
+        Announce.post(message)
+        renderer.enqueue(
+            SpeechEnvelope(seq: 0, priority: .now, ts: 0, items: [.text(message)])
+        )
     }
 
     private func appendToLog(_ text: String) {
