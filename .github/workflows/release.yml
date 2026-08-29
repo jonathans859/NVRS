@@ -51,3 +51,35 @@ jobs:
       # iOS one; validate the tag against the spec the build actually used.
       version-file: project-mac.yml
       groups: ${{ vars.TESTFLIGHT_EXTERNAL_GROUPS || 'External' }}
+
+  # The NVDA add-on is the other half of the product: without it there is nothing
+  # for the app to receive. It ships on the same GitHub release, built here rather
+  # than by hand so a release can never go out with a stale or missing add-on.
+  #
+  # Its version is its own (addon/manifest.ini), deliberately not the app's
+  # MARKETING_VERSION: NVDA's add-on store uses that number, and the two halves
+  # have their own compatibility story. Say which add-on version a release carries
+  # in the release notes.
+  addon:
+    name: NVDA add-on
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Nothing else compiles this code -- the add-on is plain Python run inside
+      # NVDA, so a syntax error would otherwise reach a user's screen reader.
+      - name: Byte-compile the add-on
+        run: python3 -m compileall -q addon
+
+      - name: Build the add-on
+        run: python3 tools/build_addon.py
+
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          ls -la dist/
+          gh release upload "$TAG" dist/*.nvda-addon --clobber
