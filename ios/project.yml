@@ -24,6 +24,14 @@ targets:
       path: NVRS/Info.plist
       properties:
         CFBundleDisplayName: NVRS
+        # Without these two the generated Info.plist carries a LITERAL 1.0/1:
+        # MARKETING_VERSION and CURRENT_PROJECT_VERSION are build settings, and
+        # XcodeGen does not map them into the plist by itself. The version CI
+        # injects then never reaches the bundle, and Xcode renumbers the build
+        # sequentially at export -- which silently breaks anything that promotes
+        # a build by version + build number.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UIBackgroundModes: [audio]
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}

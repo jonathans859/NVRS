@@ -65,6 +65,9 @@ def nvrs_build(project:, scheme:)
       signingStyle: "automatic",
       teamID: ENV["APPLE_TEAM_ID"],
       destination: "export",
+      # Xcode otherwise rewrites CFBundleVersion at export to its own sequential
+      # number, discarding the injected commit-count value.
+      manageAppVersionAndBuildNumber: false,
     },
     xcargs: [
       "-allowProvisioningUpdates",
