@@ -1,8 +1,13 @@
 # NVRS TestFlight lanes: Apple cloud signing via the ASC API key.
-# No match, no certificate secrets; Apple holds the distribution key.
-# Optional: DEV_CERT_P12_BASE64/DEV_CERT_P12_PASSWORD provide a cached
-# Development certificate so runners don't mint a new one per build
-# (Apple caps those). Without it the lanes still work until the cap.
+# No match; Apple holds the distribution key and signs at export.
+#
+# APPLE_DEV_CERT_P12/APPLE_DEV_CERT_P12_PASSWORD are REQUIRED, not optional.
+# Cloud signing only manages the distribution certificate used at export; the
+# archive step signs with an Apple *Development* identity, and without one in
+# the keychain -allowProvisioningUpdates mints a brand-new certificate on every
+# throwaway runner until the account-wide cap breaks signing for every repo on
+# the team. One cached certificate serves the whole account -- Apple returns
+# 409 if you try to mint a second while one is current.
 
 default_platform(:ios)
 
@@ -16,19 +21,24 @@ def nvrs_asc_key
 end
 
 def nvrs_import_cached_dev_cert
-  return if ENV["DEV_CERT_P12_BASE64"].to_s.strip == ""
+  # Deliberately fatal rather than a silent return. Skipping the import does
+  # not fail the build -- cloud signing just mints its own certificate and the
+  # run goes green -- so a missing secret would be invisible until the cap.
+  if ENV["APPLE_DEV_CERT_P12"].to_s.strip == ""
+    UI.user_error!("APPLE_DEV_CERT_P12 is empty - the archive would mint a new Apple Development certificate")
+  end
 
   require "base64"
   cert_path = File.absolute_path(File.join(Dir.tmpdir, "nvrs-dev-cert.p12"))
-  File.binwrite(cert_path, Base64.decode64(ENV["DEV_CERT_P12_BASE64"]))
+  File.binwrite(cert_path, Base64.decode64(ENV["APPLE_DEV_CERT_P12"]))
   import_certificate(
     certificate_path: cert_path,
-    certificate_password: ENV["DEV_CERT_P12_PASSWORD"].to_s,
+    certificate_password: ENV["APPLE_DEV_CERT_P12_PASSWORD"].to_s,
     keychain_name: "fastlane_tmp_keychain",
     keychain_password: "",
   )
   unless sh("security find-identity -v -p codesigning", log: false).include?("Apple Development")
-    UI.user_error!("Development certificate did not import - check DEV_CERT_P12_* secrets (p12 must be legacy/SHA1 format)")
+    UI.user_error!("Development certificate did not import - check APPLE_DEV_CERT_P12_* secrets (p12 must be legacy/SHA1 format)")
   end
 end
 

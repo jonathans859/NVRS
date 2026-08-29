@@ -53,8 +53,8 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          DEV_CERT_P12_BASE64: ${{ secrets.DEV_CERT_P12_BASE64 }}
-          DEV_CERT_P12_PASSWORD: ${{ secrets.DEV_CERT_P12_PASSWORD }}
+          APPLE_DEV_CERT_P12: ${{ secrets.APPLE_DEV_CERT_P12 }}
+          APPLE_DEV_CERT_P12_PASSWORD: ${{ secrets.APPLE_DEV_CERT_P12_PASSWORD }}
           CHANGELOG: ${{ github.event.head_commit.message }}
         run: bundle exec fastlane ios beta
 
@@ -100,8 +100,8 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          DEV_CERT_P12_BASE64: ${{ secrets.DEV_CERT_P12_BASE64 }}
-          DEV_CERT_P12_PASSWORD: ${{ secrets.DEV_CERT_P12_PASSWORD }}
+          APPLE_DEV_CERT_P12: ${{ secrets.APPLE_DEV_CERT_P12 }}
+          APPLE_DEV_CERT_P12_PASSWORD: ${{ secrets.APPLE_DEV_CERT_P12_PASSWORD }}
           CHANGELOG: ${{ github.event.head_commit.message }}
         run: bundle exec fastlane mac beta
 

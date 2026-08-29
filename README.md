@@ -81,8 +81,8 @@ Required repo secrets:
 | `ASC_ISSUER_ID` | ASC issuer UUID |
 | `ASC_KEY_P8` | Full text of the `.p8` key file |
 | `APPLE_TEAM_ID` | Apple Developer team ID |
-| `DEV_CERT_P12_BASE64` | *(optional)* cached Apple Development cert (legacy-format .p12, base64) so runners don't mint one per build |
-| `DEV_CERT_P12_PASSWORD` | *(optional)* its password |
+| `APPLE_DEV_CERT_P12` | Cached Apple Development cert (legacy-format .p12, base64). One certificate is shared by every repo on the account; without it each runner mints a new one until Apple's cap breaks signing everywhere |
+| `APPLE_DEV_CERT_P12_PASSWORD` | Its password |
 
 One-time prerequisites: the App ID `com.jonathan859.nvrs` exists (done) and
 an **App Store Connect app record** for it (My Apps → ＋ → New App — cannot
