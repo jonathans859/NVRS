@@ -66,16 +66,54 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # needs tags and history to diff against the last release
+
+      # Only ship the add-on when it actually changed. Re-attaching a byte-identical
+      # file to every release invites people to reinstall something that did not
+      # move, and makes "which release changed the add-on?" unanswerable.
+      - name: Has the add-on changed since the last release?
+        id: check
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          PREV=$(git tag --sort=-creatordate | grep -v "^${TAG}$" | head -1 || true)
+          if [ -z "$PREV" ]; then
+            echo "No previous tag - first release, attaching."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Comparing addon/ against $PREV"
+          if git diff --quiet "$PREV" HEAD -- addon/; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Add-on unchanged since $PREV - nothing to attach."
+            exit 0
+          fi
+          # It changed, so the version must have moved: NVDA identifies an add-on
+          # by its manifest version, and shipping different code under a version
+          # a user already has means their install silently never updates.
+          OLD_V=$(git show "$PREV:addon/manifest.ini" | sed -n 's/^version = //p')
+          NEW_V=$(sed -n 's/^version = //p' addon/manifest.ini)
+          if [ "$OLD_V" = "$NEW_V" ]; then
+            echo "::error::addon/ changed since $PREV but manifest.ini version is still $NEW_V. Bump it, or NVDA will not offer the update."
+            exit 1
+          fi
+          echo "Add-on $OLD_V -> $NEW_V"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
       # Nothing else compiles this code -- the add-on is plain Python run inside
       # NVDA, so a syntax error would otherwise reach a user's screen reader.
       - name: Byte-compile the add-on
+        if: steps.check.outputs.changed == 'true'
         run: python3 -m compileall -q addon
 
       - name: Build the add-on
+        if: steps.check.outputs.changed == 'true'
         run: python3 tools/build_addon.py
 
       - name: Attach it to the release
+        if: steps.check.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
