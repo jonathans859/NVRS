@@ -289,7 +289,7 @@ final class MirrorViewModel: ObservableObject {
     /// Same persona in the target language if available (Apple Eloquence
     /// personas exist per language), then same engine family, then any
     /// voice of that language.
-    static func autoVoice(forPCLang lang: String, near currentId: String?) -> String? {
+    nonisolated static func autoVoice(forPCLang lang: String, near currentId: String?) -> String? {
         let bcp47 = lang.replacingOccurrences(of: "_", with: "-")
         let primary = bcp47.prefix(2)
         let candidates = AVSpeechSynthesisVoice.speechVoices().filter {

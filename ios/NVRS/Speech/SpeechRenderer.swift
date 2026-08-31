@@ -55,7 +55,15 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     var trimCharacterLimit = 2000
 
     /// Baselines, updated from Settings. Read on the main thread.
-    var baseVoiceIdentifier: String?
+    ///
+    /// Cached per-language picks are derived from this voice, so they have to
+    /// go when it changes.
+    var baseVoiceIdentifier: String? {
+        didSet {
+            guard baseVoiceIdentifier != oldValue else { return }
+            voiceCache.removeAll()
+        }
+    }
     var baseRate: Float = AVSpeechUtteranceDefaultSpeechRate
     var basePitch: Float = 1.0
     var baseVolume: Float = 1.0
@@ -464,18 +472,29 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
 
     /// A language change mid-sequence means a different voice for that
     /// segment (one AVSpeechUtterance is one voice).
+    ///
+    /// A language tag is a request for a language, not for the system default
+    /// voice of that language: the chosen voice keeps speaking as long as it
+    /// speaks that language, and only a genuinely different language sends us
+    /// looking for another voice. Getting this wrong is why a phone set to
+    /// Eloquence Reed spoke every mirrored utterance as Samantha -- NVDA tags
+    /// nearly every sequence with a language.
     private func voice(for lang: String?) -> AVSpeechSynthesisVoice? {
-        guard let lang, !lang.isEmpty else {
-            if let id = baseVoiceIdentifier {
-                return AVSpeechSynthesisVoice(identifier: id)
-            }
-            return nil
-        }
+        guard let lang, !lang.isEmpty else { return defaultVoice() }
         let bcp47 = lang.replacingOccurrences(of: "_", with: "-")
+        // Compared on the primary subtag only: an en-GB voice asked for en-US
+        // keeps speaking, rather than switching persona mid-sentence.
+        if let base = defaultVoice(), base.language.prefix(2) == bcp47.prefix(2) {
+            return base
+        }
         if let cached = voiceCache[bcp47] {
             return cached ?? defaultVoice()
         }
-        let voice = AVSpeechSynthesisVoice(language: bcp47)
+        // Same persona, then same engine family, then anything in-language --
+        // the rule the PC-voice mapping already uses when a voice is unmapped.
+        let voice = MirrorViewModel.autoVoice(forPCLang: bcp47, near: baseVoiceIdentifier)
+            .flatMap { AVSpeechSynthesisVoice(identifier: $0) }
+            ?? AVSpeechSynthesisVoice(language: bcp47)
             ?? AVSpeechSynthesisVoice(language: String(bcp47.prefix(2)))
         voiceCache[bcp47] = voice
         return voice ?? defaultVoice()
