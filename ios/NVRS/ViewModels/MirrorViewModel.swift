@@ -274,12 +274,20 @@ final class MirrorViewModel: ObservableObject {
         return settings.voiceIdentifier
     }
 
+    /// The phone rate. "Follow PC rate" makes NVDA's rate a *relative*
+    /// multiplier on the local baseline — the same 0–100 scale with 50 as the
+    /// nominal midpoint that every prosody offset already uses — rather than
+    /// replacing the baseline with it.
+    ///
+    /// It replaced it until now, which meant the slider did nothing at all
+    /// while a PC was connected, with nothing in the UI to say so, and left
+    /// the rate pinned to wherever NVDA's number happened to land: a normal
+    /// NVDA rate of 80 mapped straight onto 0.8, near the top of AVSpeech's
+    /// range, with no way to pull it back.
     private func effectiveRate() -> Float {
-        if settings.followPCRate, let rate = pcConfig?.rate {
-            // NVDA's 0–100 onto AVSpeech's 0–1 (default 0.5 = NVDA 50).
-            return min(max(Float(rate) / 100.0, 0.05), 1.0)
-        }
-        return Float(settings.baseRate)
+        let base = Float(settings.baseRate)
+        guard settings.followPCRate, let rate = pcConfig?.rate else { return base }
+        return min(max(base * (Float(rate) / 50.0), 0.05), 1.0)
     }
 
     static func pcVoiceKey(for config: SynthConfig) -> String {

@@ -36,7 +36,7 @@ struct SettingsView: View {
                 Toggle("Follow PC voice", isOn: $settings.followPCVoice)
                     .accessibilityHint("Switches the phone voice when NVDA's synth or voice changes, using the mapping below or the same language automatically.")
                 Toggle("Follow PC rate", isOn: $settings.followPCRate)
-                    .accessibilityHint("Tracks NVDA's speech rate instead of the local rate slider.")
+                    .accessibilityHint("Scales the rate slider by NVDA's own speech rate, so changing the rate on the PC changes it here too. The slider still sets the baseline.")
                 NavigationLink("PC voice mapping") {
                     PCVoiceMappingView()
                 }
