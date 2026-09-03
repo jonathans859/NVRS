@@ -7,6 +7,12 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
+    # Stays on 0.x on purpose -- this is not a 1.0 app yet. The pre-2026-08-29
+    # builds shipped as Xcode's literal 1.0 because MARKETING_VERSION never
+    # reached the plist; that accidental 1.0 train is expired in App Store
+    # Connect so 0.1.0 is the highest version TestFlight offers. Never let this
+    # number go DOWN: TestFlight only offers a build whose version beats the
+    # installed one, and a regression silently stops every update.
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
 targets:
