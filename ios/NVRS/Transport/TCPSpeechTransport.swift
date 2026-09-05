@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Network
 
@@ -17,6 +18,15 @@ final class TCPSpeechTransport: SpeechTransport {
     private var bytesReceived = 0
     private var linesParsed = 0
     private var decodeFailures = 0
+    /// Guards the handshake against being sent twice: the challenge and the
+    /// grace timer race each other by design, and whichever loses must do
+    /// nothing.
+    private var authSent = false
+
+    /// How long to wait for a challenge before assuming the add-on predates it
+    /// and falling back to the old handshake. The add-on sends its challenge
+    /// before reading anything, so on a healthy link this never elapses.
+    private static let challengeGraceSeconds = 2.0
 
     init(host: String, port: UInt16, secret: String) {
         self.host = host
@@ -69,6 +79,7 @@ final class TCPSpeechTransport: SpeechTransport {
         let conn = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: params)
         connection = conn
         buffer.removeAll()
+        authSent = false
         emit(.stateChanged(.connecting))
         conn.stateUpdateHandler = { [weak self] state in
             self?.handleState(state, of: conn)
@@ -81,9 +92,14 @@ final class TCPSpeechTransport: SpeechTransport {
         switch state {
         case .ready:
             attempt = 0
-            sendAuth(on: conn)
             emit(.stateChanged(.connected))
+            // Listen first: the add-on speaks before we do now, and its
+            // challenge decides which handshake we send.
             receiveLoop(on: conn)
+            queue.asyncAfter(deadline: .now() + Self.challengeGraceSeconds) { [weak self] in
+                guard let self, conn === self.connection, !self.authSent else { return }
+                self.sendLegacyAuth(on: conn)
+            }
         case .waiting(let error):
             // No route yet (e.g. Tailscale down); Network.framework retries
             // by itself when connectivity changes, so just surface it.
@@ -113,7 +129,26 @@ final class TCPSpeechTransport: SpeechTransport {
         }
     }
 
-    private func sendAuth(on conn: NWConnection) {
+    /// Answer the add-on's challenge, so the secret itself never leaves the
+    /// phone. `authScheme` is what tells the add-on which of the two this is.
+    private func sendChallengeResponse(nonce: String, on conn: NWConnection) {
+        guard !authSent else { return }
+        authSent = true
+        sendLine([
+            "auth": Self.authResponse(secret: secret, nonce: nonce),
+            "authScheme": WireProtocol.authScheme,
+            "protocol": WireProtocol.version,
+            "minProtocol": WireProtocol.minimum,
+            "client": "NVRS app",
+        ], on: conn)
+    }
+
+    /// The pre-challenge handshake: the secret in the clear. Only for an add-on
+    /// old enough not to challenge us -- it is the thing the challenge exists to
+    /// stop, so it must never be what we reach for first.
+    private func sendLegacyAuth(on conn: NWConnection) {
+        guard !authSent else { return }
+        authSent = true
         // The extra keys are additive: an add-on that predates protocol
         // versioning reads "auth" and ignores the rest, so this is safe to send
         // to every add-on already installed.
@@ -123,6 +158,16 @@ final class TCPSpeechTransport: SpeechTransport {
             "minProtocol": WireProtocol.minimum,
             "client": "NVRS app",
         ], on: conn)
+    }
+
+    /// Lowercase hex HMAC-SHA256 over the nonce's own characters, keyed with the
+    /// secret. Hashing the nonce as sent rather than its decoded bytes keeps the
+    /// two ends from having to agree on a hex-decoding step -- a classic way for
+    /// peers to quietly derive different keys.
+    static func authResponse(secret: String, nonce: String) -> String {
+        let key = SymmetricKey(data: Data(secret.utf8))
+        let code = HMAC<SHA256>.authenticationCode(for: Data(nonce.utf8), using: key)
+        return code.map { String(format: "%02x", $0) }.joined()
     }
 
     /// One NDJSON line up the same socket the add-on streams down.
@@ -138,7 +183,7 @@ final class TCPSpeechTransport: SpeechTransport {
             if let data, !data.isEmpty {
                 self.bytesReceived += data.count
                 self.buffer.append(data)
-                self.drainLines()
+                self.drainLines(on: conn)
                 self.emit(.stats(
                     bytesReceived: self.bytesReceived,
                     linesParsed: self.linesParsed,
@@ -155,13 +200,18 @@ final class TCPSpeechTransport: SpeechTransport {
         }
     }
 
-    private func drainLines() {
+    private func drainLines(on conn: NWConnection) {
         while let newlineIndex = buffer.firstIndex(of: UInt8(ascii: "\n")) {
             let lineData = buffer.subdata(in: buffer.startIndex..<newlineIndex)
             buffer.removeSubrange(buffer.startIndex...newlineIndex)
             guard !lineData.isEmpty else { continue }
             linesParsed += 1
             if let message = WireParser.parse(lineData) {
+                if case .challenge(let nonce) = message {
+                    // Handshake business, not something the UI has any use for.
+                    sendChallengeResponse(nonce: nonce, on: conn)
+                    continue
+                }
                 emit(.message(message))
             } else {
                 decodeFailures += 1

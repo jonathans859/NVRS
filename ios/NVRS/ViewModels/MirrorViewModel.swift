@@ -586,6 +586,10 @@ final class MirrorViewModel: ObservableObject {
         case .error(_, let message):
             // The add-on refusing us, with its reason, before it closes.
             reportIncompatible(message)
+        case .challenge:
+            // Answered inside the transport, which never forwards it up: the
+            // handshake is not this layer's business.
+            break
         case .unknown:
             break
         }

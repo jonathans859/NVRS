@@ -1,13 +1,31 @@
 # NVRS: Non-Visual Remote Speech - transport layer.
 # Part of the NVRS add-on. Stdlib only: NVDA add-ons cannot install packages.
 
+import hashlib
 import hmac
 import json
 import queue
+import secrets
 import socket
 import threading
 
 from logHandler import log
+
+#: How the app proves it knows the shared secret: hex HMAC-SHA256 over the
+#: challenge nonce, keyed with the secret. Named on the wire so a future
+#: scheme can be added without guessing what a response means.
+AUTH_SCHEME = "hmac-sha256"
+#: Bytes of randomness in the challenge, as hex.
+NONCE_BYTES = 32
+#: Whether a client may still authenticate by sending the secret itself.
+#:
+#: The point of the challenge is that the secret never crosses the wire, and
+#: that is only true once this is False -- while it is True an eavesdropper
+#: simply speaks the old handshake and learns the secret anyway. It stays True
+#: only until the app carrying the new handshake has shipped; flipping it is
+#: the change that actually buys the security, and it is a breaking change
+#: (bump PROTOCOL_VERSION and MIN_PROTOCOL_VERSION to 2 with it).
+ALLOW_LEGACY_PLAINTEXT_AUTH = True
 
 AUTH_TIMEOUT_SEC = 10
 CLIENT_QUEUE_SIZE = 256
@@ -232,7 +250,13 @@ class TcpServerTransport(SpeechTransport):
 		client = _Client(sock, addr)
 		try:
 			sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-			payload = self._authenticate(sock)
+			# Challenge first, so the app can prove it knows the secret instead
+			# of sending it. Fresh per connection: a recorded response is worth
+			# nothing on the next one. An app that predates this ignores the
+			# unrecognised "type" and sends the old handshake.
+			nonce = secrets.token_hex(NONCE_BYTES)
+			self._sendLine(sock, {"type": "challenge", "nonce": nonce, "scheme": AUTH_SCHEME})
+			payload = self._authenticate(sock, nonce, addr)
 			if payload is None:
 				log.warning("NVRS: rejected connection from %s (bad auth)" % (addr[0],))
 				client.close()
@@ -290,7 +314,7 @@ class TcpServerTransport(SpeechTransport):
 				except Exception:
 					log.error("NVRS: onListenerDisconnected failed", exc_info=True)
 
-	def _authenticate(self, sock):
+	def _authenticate(self, sock, nonce, addr):
 		"""Read the handshake line. Returns the parsed payload, or None if the
 		secret is wrong or the line is unusable."""
 		if not self._secret:
@@ -311,11 +335,45 @@ class TcpServerTransport(SpeechTransport):
 			supplied = payload.get("auth", "")
 		except (ValueError, AttributeError, UnicodeDecodeError):
 			return None
-		if not isinstance(supplied, str):
+		if not isinstance(supplied, str) or not isinstance(payload, dict):
 			return None
-		if not hmac.compare_digest(supplied.encode("utf-8"), self._secret.encode("utf-8")):
+		scheme = payload.get("authScheme")
+		if scheme == AUTH_SCHEME:
+			expected = self._expectedResponse(nonce)
+			# Hex, so case is not meaningful; do not fail a client over it.
+			if not hmac.compare_digest(supplied.strip().lower(), expected):
+				return None
+		elif scheme is None:
+			# The pre-challenge handshake: the secret itself, in the clear.
+			if not ALLOW_LEGACY_PLAINTEXT_AUTH:
+				log.warning(
+					"NVRS: %s sent the secret in the clear; that handshake is no "
+					"longer accepted. Update the app." % (addr[0],)
+				)
+				return None
+			if not hmac.compare_digest(supplied.encode("utf-8"), self._secret.encode("utf-8")):
+				return None
+			log.warning(
+				"NVRS: %s authenticated by sending the secret in the clear -- "
+				"anyone watching the network now has it. Update the app." % (addr[0],)
+			)
+		else:
+			log.warning("NVRS: %s asked for unknown auth scheme %r" % (addr[0], scheme))
 			return None
-		return payload if isinstance(payload, dict) else {}
+		return payload
+
+	def _expectedResponse(self, nonce):
+		"""The response we expect for `nonce`: lowercase hex HMAC-SHA256 over the
+		nonce's ASCII, keyed with the shared secret's UTF-8.
+
+		Hashing the nonce *as sent* rather than its decoded bytes is deliberate:
+		it removes the hex-decoding step that both ends would otherwise have to
+		agree on, which is a classic source of two peers quietly deriving
+		different keys.
+		"""
+		return hmac.new(
+			self._secret.encode("utf-8"), nonce.encode("ascii"), hashlib.sha256
+		).hexdigest()
 
 	def _sendLine(self, sock, message):
 		"""One NDJSON line straight down the socket, outside the sender queue --

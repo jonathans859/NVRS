@@ -26,14 +26,56 @@ speak; peers are compatible when the two ranges overlap.
 
 ## Handshake
 
-First line from the client:
+The add-on speaks first, before it reads anything, with a challenge:
+
+```json
+{"type": "challenge", "nonce": "<64 hex chars>", "scheme": "hmac-sha256"}
+```
+
+The nonce is 32 random bytes as hex, **fresh on every connection**. The client
+answers it rather than sending the secret:
+
+```json
+{"auth": "<response>", "authScheme": "hmac-sha256", "protocol": 1, "minProtocol": 1, "client": "NVRS app"}
+```
+
+where the response is lowercase hex
+
+```
+HMAC-SHA256(key = <shared secret> as UTF-8, message = <nonce> as ASCII)
+```
+
+The nonce is hashed **as sent** — its own hex characters, not the bytes it
+decodes to. That deliberately removes a decoding step the two ends would
+otherwise have to agree on, which is a classic way for peers to derive
+different keys while both believing they used the same secret. Comparison is
+constant-time, and case-insensitive because hex case carries no meaning.
+
+Answering a challenge proves knowledge of the secret without transmitting it,
+so a listener on the network learns nothing reusable: the response is bound to
+a nonce that will never come up again. It does **not** encrypt what follows —
+the speech stream is plaintext, and a listener still reads it. Use Tailscale on
+a network you do not control.
+
+### The legacy cleartext handshake
+
+An app predating the challenge ignores the unrecognised `type` and sends the
+secret itself, with no `authScheme`:
 
 ```json
 {"auth": "<shared secret>", "protocol": 1, "minProtocol": 1, "client": "NVRS app"}
 ```
 
-The add-on closes the connection unless the secret matches (constant-time
-comparison).
+The add-on still accepts this, and logs a warning naming it, while
+`ALLOW_LEGACY_PLAINTEXT_AUTH` is true in `transport.py`. **The challenge buys
+nothing until that is false** — an eavesdropper who can speak the old handshake
+simply does, and learns the secret anyway. Switching it off is a breaking
+change: bump `PROTOCOL_VERSION` and `MIN_PROTOCOL_VERSION` to 2 with it.
+
+Adding the challenge is itself *additive* and so does **not** bump the protocol
+version: an old app is unaffected by a `type` it skips, and a new app falls
+back to the old handshake when no challenge arrives (it waits ~2 s, since an
+add-on that challenges does so before reading).
 
 **A handshake with no `protocol` key means protocol 1.** Versions of the app
 predating this section sent only `auth`, and must keep working.

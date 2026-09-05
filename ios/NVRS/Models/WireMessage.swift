@@ -121,6 +121,9 @@ enum WireProtocol {
     static let version = 1
     /// Oldest add-on protocol this app still speaks.
     static let minimum = 1
+    /// How we answer the add-on's challenge: hex HMAC-SHA256 over the nonce,
+    /// keyed with the shared secret.
+    static let authScheme = "hmac-sha256"
 }
 
 enum ServerMessage {
@@ -144,6 +147,11 @@ enum ServerMessage {
     /// speech. An add-on that predates protocol versioning sends nothing here --
     /// absence therefore means protocol 1, and must never be treated as a fault.
     case hello(protocol: Int, minProtocol: Int, server: String?)
+    /// The add-on's opening line, before we have said anything: a fresh random
+    /// nonce to answer instead of sending the secret itself. An add-on that
+    /// predates this sends none, so its absence is not a fault -- it means the
+    /// old handshake is the only one available.
+    case challenge(nonce: String)
     /// The add-on refusing us, with a reason, before it closes the socket. A
     /// silent close would be indistinguishable from a wrong shared secret, a
     /// firewall, or Tailscale being down.
@@ -200,6 +208,11 @@ private struct HelloMessage: Decodable {
     }
 }
 
+private struct ChallengeMessage: Decodable {
+    let nonce: String?
+    let scheme: String?
+}
+
 private struct ErrorMessage: Decodable {
     let code: String?
     let message: String?
@@ -241,6 +254,17 @@ enum WireParser {
                 minProtocol: hello.minProtocol ?? hello.protocolVersion ?? 1,
                 server: hello.server
             )
+        case "challenge":
+            guard let challenge = try? decoder.decode(ChallengeMessage.self, from: data),
+                  let nonce = challenge.nonce,
+                  challenge.scheme == nil || challenge.scheme == WireProtocol.authScheme
+            else {
+                // A scheme we cannot compute is not a fault to report: fall
+                // through as unknown and let the handshake time out into the
+                // legacy path, which still works.
+                return .unknown
+            }
+            return .challenge(nonce: nonce)
         case "error":
             guard let err = try? decoder.decode(ErrorMessage.self, from: data) else { return .unknown }
             return .error(code: err.code ?? "unknown", message: err.message ?? "")

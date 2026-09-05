@@ -11,6 +11,8 @@ rather than to nvda.exe. Run with: python tools/selftest_mute.py
 """
 
 import builtins
+import hashlib
+import hmac
 import importlib
 import json
 import socket
@@ -23,6 +25,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PORT = 6898
 SECRET = "selftest-secret"
+NEWLINE = chr(10).encode("ascii")
 
 failures = []
 
@@ -108,14 +111,38 @@ def installNVDAStubs():
 class FakeApp:
 	"""The iOS app's half of the wire protocol."""
 
-	def __init__(self):
+	def __init__(self, legacyAuth=False):
 		self.sock = socket.create_connection(("127.0.0.1", PORT), timeout=5)
-		self.sock.sendall(json.dumps({"auth": SECRET}).encode("utf-8") + b"\n")
 		self.messages = []
 		self._buf = b""
 		self._stop = threading.Event()
+		if legacyAuth:
+			# What an app built before the challenge sends: the secret itself.
+			self.send({"auth": SECRET})
+		else:
+			self.send({
+				"auth": authResponse(SECRET, self._awaitChallenge()),
+				"authScheme": "hmac-sha256",
+				"protocol": 1,
+				"minProtocol": 1,
+				"client": "selftest",
+			})
 		self._thread = threading.Thread(target=self._read, daemon=True)
 		self._thread.start()
+
+	def _awaitChallenge(self):
+		"""Read the add-on's opening challenge before the reader thread starts,
+		so the handshake is ordered rather than racing it."""
+		self.sock.settimeout(5)
+		while NEWLINE not in self._buf:
+			chunk = self.sock.recv(4096)
+			if not chunk:
+				raise AssertionError("add-on closed before sending a challenge")
+			self._buf += chunk
+		line, self._buf = self._buf.split(NEWLINE, 1)
+		message = json.loads(line)
+		assert message.get("type") == "challenge", message
+		return message["nonce"]
 
 	def _read(self):
 		while not self._stop.is_set():
@@ -143,6 +170,12 @@ class FakeApp:
 	def close(self):
 		self._stop.set()
 		self.sock.close()
+
+
+def authResponse(secret, nonce):
+	"""Mirror of the app's CryptoKit HMAC, so the self-test proves the two
+	derivations agree rather than assuming they do."""
+	return hmac.new(secret.encode("utf-8"), nonce.encode("ascii"), hashlib.sha256).hexdigest()
 
 
 def settle(seconds=0.6):

@@ -44,6 +44,10 @@ VPS) can be added later without touching the rest.
 - `python tools/selftest_mute.py` drives the whole PC-mute flow (connect →
   mute, app toggle, shortcut, disconnect → unmute) against the real
   transport and the real Windows audio session, without NVDA installed.
+- `python tools/selftest_auth.py` drives the handshake against the real
+  transport: a fresh nonce per connection, a replayed response refused, and
+  the legacy cleartext handshake both accepted-with-a-warning and refused once
+  `ALLOW_LEGACY_PLAINTEXT_AUTH` is off.
 
 ## iOS app
 
