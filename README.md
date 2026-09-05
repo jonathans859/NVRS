@@ -8,7 +8,7 @@ Two parts, one repo:
 
 | Path | What |
 |---|---|
-| `addon/` | NVDA add-on (Python, stdlib only): captures every speech sequence via `speech.extensions.pre_speechQueued` (SayAll included), serializes it as NDJSON, serves it over TCP bound to the Tailscale interface. |
+| `addon/` | NVDA add-on (Python, stdlib only): captures every speech sequence via `speech.extensions.pre_speechQueued` (SayAll included), serializes it as NDJSON, serves it over TCP on every interface, so the app can reach it over Tailscale, Wi-Fi or Ethernet. |
 | `ios/` | SwiftUI app: connects out, reconstructs speech with `AVSpeechSynthesizer` (pitch/rate/volume offsets, language switches, spelling mode, breaks, capital beeps), plays in the background, keeps a capped log of what was spoken. |
 
 The wire format is documented in [PROTOCOL.md](PROTOCOL.md). The transport
@@ -20,8 +20,14 @@ VPS) can be added later without touching the rest.
 - Build: `python tools/build_addon.py` → `dist/nvrs-<version>.nvda-addon`;
   install via NVDA's Tools → Add-on store → Install from external source.
 - Configure under NVDA menu → Preferences → Settings → NVRS: port
-  (default 6877), shared secret (required — the server refuses connections
-  without one), bind address (`auto` = Tailscale interface).
+  (default 6877) and shared secret (required — the server refuses
+  connections without one).
+- The add-on listens on **all** interfaces, so the app can connect over
+  Tailscale, home Wi-Fi or Ethernet — whichever route the two share. Windows
+  Firewall may ask to allow `nvda.exe` the first time; it has to be allowed
+  for at least the network you connect over. The stream is plaintext, so on
+  a network you don't control (café, hotel, conference) use Tailscale, which
+  encrypts it.
 - **NVDA+Shift+N** toggles muting the stream (reassignable under Input
   Gestures → NVRS). Muting also stops the phone mid-utterance.
 - **Mute this PC's speech while the app is connected** (off by default) makes
@@ -41,7 +47,8 @@ VPS) can be added later without touching the rest.
 
 ## iOS app
 
-Configure host (PC's Tailscale IP/MagicDNS name), port, and the same shared
+Configure host (any address the PC answers on — its Tailscale IP or
+MagicDNS name, or its LAN address), port, and the same shared
 secret in Settings. Pick any installed iOS voice and baseline rate/pitch/
 volume — NVDA's prosody changes apply *relative to* that baseline. Two-finger
 double tap (magic tap) mutes/unmutes local speech anywhere in the app.

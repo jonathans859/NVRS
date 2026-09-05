@@ -1,8 +1,9 @@
 # NVRS wire protocol (v1)
 
 Newline-delimited JSON (NDJSON) over a raw TCP socket. The NVDA add-on
-listens on the Tailscale interface; the iOS app connects out to
-`<tailscale-ip>:<port>` (default port **6877**). UTF-8 throughout; one JSON
+listens on all interfaces; the iOS app connects out to
+`<pc-address>:<port>` (default port **6877**), over a tailnet or a plain
+LAN. UTF-8 throughout; one JSON
 object per line.
 
 ## Versioning
@@ -45,7 +46,7 @@ If the versions are incompatible the add-on sends an error and *then* closes:
 
 The message says which side is out of date, because that is the only actionable
 part. Closing silently would be indistinguishable from a wrong shared secret, a
-firewall, or Tailscale being down.
+firewall, or the PC being unreachable.
 
 Otherwise the add-on replies first with:
 

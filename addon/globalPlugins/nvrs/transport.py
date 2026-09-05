@@ -2,18 +2,12 @@
 # Part of the NVRS add-on. Stdlib only: NVDA add-ons cannot install packages.
 
 import hmac
-import ipaddress
 import json
 import queue
 import socket
 import threading
 
 from logHandler import log
-
-#: Connecting to Tailscale's MagicDNS resolver routes via the Tailscale
-#: interface, so the socket's local address is this machine's tailnet IP.
-_TAILSCALE_PROBE_ADDR = ("100.100.100.100", 53)
-_TAILSCALE_CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
 
 AUTH_TIMEOUT_SEC = 10
 CLIENT_QUEUE_SIZE = 256
@@ -31,23 +25,6 @@ MAX_CLIENT_LINE_BYTES = 4096
 PROTOCOL_VERSION = 1
 #: Oldest peer protocol this add-on still speaks.
 MIN_PROTOCOL_VERSION = 1
-
-def detectTailscaleIP():
-	"""Best-effort detection of this machine's Tailscale IPv4 address.
-	Returns None when Tailscale is down or not installed.
-	"""
-	try:
-		s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-		try:
-			s.connect(_TAILSCALE_PROBE_ADDR)
-			ip = s.getsockname()[0]
-		finally:
-			s.close()
-		if ipaddress.ip_address(ip) in _TAILSCALE_CGNAT_NET:
-			return ip
-	except OSError:
-		pass
-	return None
 
 
 class SpeechTransport:
@@ -130,14 +107,22 @@ class _Client:
 
 
 class TcpServerTransport(SpeechTransport):
-	"""Listens for NVRS app connections on a TCP port bound to the
-	Tailscale interface (or an explicit address), speaking NDJSON.
+	"""Listens for NVRS app connections on a TCP port, speaking NDJSON.
+
+	Binds every interface by default, so the app can reach the PC over
+	Tailscale, Wi-Fi or Ethernet -- whichever the two happen to share --
+	rather than only over a tailnet. The shared secret is what guards the
+	port; note that the stream itself is plaintext, so an untrusted network
+	is a reason to keep using Tailscale, not a reason to bind narrowly.
+
+	`bindAddress` narrows that for callers who want it (a test can pass
+	"127.0.0.1" to stay off the network entirely).
 
 	First line from the client must be {"auth": "<secret>"}; anything else
 	closes the connection.
 	"""
 
-	def __init__(self, port, secret, bindAddress="auto"):
+	def __init__(self, port, secret, bindAddress="0.0.0.0"):
 		self._port = port
 		self._secret = secret
 		self._bindAddress = bindAddress
@@ -191,20 +176,9 @@ class TcpServerTransport(SpeechTransport):
 		for client in clients:
 			client.enqueue(data)
 
-	def _resolveBindAddress(self):
-		if self._bindAddress and self._bindAddress != "auto":
-			return self._bindAddress
-		return detectTailscaleIP()
-
 	def _acceptLoop(self):
+		bindAddr = self._bindAddress
 		while not self._stopping.is_set():
-			bindAddr = self._resolveBindAddress()
-			if bindAddr is None:
-				log.debugWarning(
-					"NVRS: no Tailscale interface found; retrying in %ds" % BIND_RETRY_SEC
-				)
-				self._stopping.wait(BIND_RETRY_SEC)
-				continue
 			try:
 				serverSock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 				# Other components in the NVDA process may set a global
@@ -215,8 +189,11 @@ class TcpServerTransport(SpeechTransport):
 				serverSock.bind((bindAddr, self._port))
 				serverSock.listen(2)
 			except OSError:
+				# Almost always the port already being in use. Worth a real
+				# warning: nothing else tells the user why the app cannot
+				# connect, and the retry alone is silent.
 				log.error(
-					"NVRS: could not listen on %s:%d; retrying in %ds"
+					"NVRS: could not listen on %s:%d (port in use?); retrying in %ds"
 					% (bindAddr, self._port, BIND_RETRY_SEC),
 					exc_info=True,
 				)
@@ -243,8 +220,8 @@ class TcpServerTransport(SpeechTransport):
 						daemon=True,
 					).start()
 			except OSError:
-				# Server socket closed (stop()) or bind address vanished
-				# (Tailscale went down); loop re-binds unless stopping.
+				# Server socket closed by stop(), or the listener failed;
+				# loop re-binds unless we are stopping.
 				try:
 					serverSock.close()
 				except OSError:

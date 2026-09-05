@@ -163,7 +163,6 @@ def main():
 		"enabled": True,
 		"port": PORT,
 		"secret": SECRET,
-		"bindAddress": "127.0.0.1",
 		"muteLocalAudio": False,
 	}
 	plugin = nvrs.GlobalPlugin()

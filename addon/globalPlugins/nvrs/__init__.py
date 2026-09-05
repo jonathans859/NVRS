@@ -37,7 +37,6 @@ config.conf.spec["nvrs"] = {
 	"enabled": "boolean(default=true)",
 	"port": "integer(default=6877, min=1, max=65535)",
 	"secret": "string(default='')",
-	"bindAddress": "string(default='auto')",
 	# Opt-in only: silencing the PC's own speakers is never done behind
 	# the user's back.
 	"muteLocalAudio": "boolean(default=false)",
@@ -336,7 +335,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		self._transport = TcpServerTransport(
 			port=conf["port"],
 			secret=conf["secret"],
-			bindAddress=conf["bindAddress"],
 		)
 		self._transport.onListenerConnected = self._onListenerConnected
 		self._transport.onListenerDisconnected = self._onListenerDisconnected
@@ -437,12 +435,6 @@ class NVRSSettingsPanel(SettingsPanel):
 		# Translators: label of the shared secret field in NVRS settings.
 		self.secretEdit = helper.addLabeledControl(_("Shared &secret"), wx.TextCtrl)
 		self.secretEdit.SetValue(conf["secret"])
-		self.bindEdit = helper.addLabeledControl(
-			# Translators: label of the bind address field in NVRS settings.
-			_("&Bind address (auto = Tailscale interface)"),
-			wx.TextCtrl,
-		)
-		self.bindEdit.SetValue(conf["bindAddress"])
 		self.muteLocalCheckbox = helper.addItem(
 			wx.CheckBox(
 				self,
@@ -470,7 +462,6 @@ class NVRSSettingsPanel(SettingsPanel):
 		conf["enabled"] = self.enabledCheckbox.GetValue()
 		conf["port"] = self.portEdit.GetValue()
 		conf["secret"] = self.secretEdit.GetValue()
-		conf["bindAddress"] = self.bindEdit.GetValue().strip() or "auto"
 		conf["muteLocalAudio"] = self.muteLocalCheckbox.GetValue()
 		if _plugin is not None:
 			# Restarting drops the listeners, which unmutes; the mute
