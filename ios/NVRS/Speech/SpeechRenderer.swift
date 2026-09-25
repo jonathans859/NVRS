@@ -29,6 +29,11 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     private var speaking = false
     private var voiceCache: [String: AVSpeechSynthesisVoice?] = [:]
     private var isPaused = false
+    /// Utterances whose render already failed. They go to the system
+    /// synthesizer next time round: rendering them again fails the same way
+    /// when the cause is the text (too slow for the watchdog) or the voice
+    /// (nothing offline), and the queue behind them never moves again.
+    private var renderFailed: [AVSpeechUtterance] = []
     /// The last utterance handed to a player was a keystroke echo.
     private var lastEnqueuedBrief = false
     /// A keystroke echo: one or two characters, as typing produces.
@@ -144,6 +149,7 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         case .now:
             // Interrupt: this is what makes it feel live instead of laggy.
             pending = steps
+            renderFailed.removeAll()
             interruptCurrentUtterance()
         case .next:
             pending.insert(contentsOf: steps, at: 0)
@@ -223,6 +229,7 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
             setPaused(false)
         }
         pending.removeAll()
+        renderFailed.removeAll()
         interruptCurrentUtterance()
         if isIdle {
             onActivity?(false)
@@ -282,16 +289,20 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
             switch step {
             case .utterance(let utterance):
                 let characters = utterance.speechString.count
-                if characters > trimCharacterLimit {
+                let tooLong = characters > trimCharacterLimit
+                if tooLong || renderFailed.contains(where: { $0 === utterance }) {
                     // Like a beep, this plays on the system synthesizer and
                     // must not overtake audio still scheduled ahead of it.
                     guard trimmedPlayer.isIdle else { return }
                     pending.removeFirst()
+                    renderFailed.removeAll { $0 === utterance }
                     onActivity?(true)
-                    lastEnqueuedBrief = false
+                    lastEnqueuedBrief = characters <= briefCharacterLimit
                     speaking = true
                     synthesizer.speak(utterance)
-                    onLongUtteranceSpokenPlain?(characters)
+                    if tooLong {
+                        onLongUtteranceSpokenPlain?(characters)
+                    }
                     // didFinish resumes the trimmed pump.
                     return
                 }
@@ -337,7 +348,18 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         // (see SpeechBufferRenderer.finish). With the wedge repaired at its
         // source there is nothing for a cooldown to wait out, so each failure
         // now costs one utterance and nothing more.
+        //
+        // That one utterance has to go the plain way, though. Re-queueing it
+        // for rendering, as this used to, retried it for ever whenever the
+        // failure was deterministic — a voice slower than the watchdog allows
+        // for, or one that renders nothing offline — and everything received
+        // after it sat in the queue unspoken until the next cancel. Only the
+        // first one failed; the rest never reached the renderer and get their
+        // own try.
         onTrimFailure?(reason)
+        if let failed = returned.first {
+            renderFailed.append(failed)
+        }
         for utterance in returned.reversed() {
             pending.insert(.utterance(utterance), at: 0)
         }
