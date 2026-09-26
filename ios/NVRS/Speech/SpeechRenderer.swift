@@ -101,6 +101,11 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// to be queued again. Diagnostics only; recovery is automatic.
     var onAudioReset: (() -> Void)?
 
+    /// Speech still playing was stopped by the PC: `true` for NVDA's cancel,
+    /// `false` for interrupting speech. Diagnostics only - it tells an
+    /// ordinary interruption apart from speech that ends early by itself.
+    var onSpeechCutOff: ((Bool) -> Void)?
+
     /// Pause shortening. `.off` keeps the plain `speak()` path, so the
     /// default behaviour is byte-for-byte what it was.
     var pauseMode: PauseMode = .off {
@@ -150,7 +155,9 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
             // Interrupt: this is what makes it feel live instead of laggy.
             pending = steps
             renderFailed.removeAll()
-            interruptCurrentUtterance()
+            if interruptCurrentUtterance() {
+                onSpeechCutOff?(false)
+            }
         case .next:
             pending.insert(contentsOf: steps, at: 0)
         case .normal:
@@ -210,7 +217,9 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
             onTypingCancelHeld?()
             return
         }
-        cancelAll()
+        if cancelAll() {
+            onSpeechCutOff?(true)
+        }
     }
 
     private var isTypingBurst: Bool {
@@ -221,7 +230,9 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
-    func cancelAll() {
+    /// Returns whether anything was playing.
+    @discardableResult
+    func cancelAll() -> Bool {
         lastEnqueuedBrief = false
         // NVDA clears its own pause when speech is cancelled, so a stale
         // pause must never outlive the queue it was holding.
@@ -230,10 +241,11 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
         }
         pending.removeAll()
         renderFailed.removeAll()
-        interruptCurrentUtterance()
+        let stopped = interruptCurrentUtterance()
         if isIdle {
             onActivity?(false)
         }
+        return stopped
     }
 
     var isIdle: Bool {
@@ -242,15 +254,19 @@ final class SpeechRenderer: NSObject, AVSpeechSynthesizerDelegate {
 
     // MARK: - Queue pump
 
-    private func interruptCurrentUtterance() {
+    /// Returns whether anything was playing.
+    @discardableResult
+    private func interruptCurrentUtterance() -> Bool {
         // Stopping the player drops every buffer already scheduled, so an
         // interrupt still clears everything at once even though scheduling
         // now runs ahead of playback.
-        trimmedPlayer.stopAll()
+        var stopped = trimmedPlayer.stopAll()
         if synthesizer.isSpeaking {
+            stopped = true
             synthesizer.stopSpeaking(at: .immediate)
             // didCancel fires and pumps the queue.
         }
+        return stopped
     }
 
     private func speakNextIfIdle() {

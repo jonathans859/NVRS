@@ -37,6 +37,14 @@ final class TrimmedUtterancePlayer {
         /// working perfectly well.
         var characterCount = 0
         var analysis = SilenceTrimmer.Analysis()
+        /// See `SpeechBufferRenderer.Result`: audio the voice produced that
+        /// never made it into what was played.
+        var buffersAfterEnd = 0
+        var mismatchedBuffers = 0
+        var resumedAfterEnd = 0
+        /// This render's format differed from the last one while audio was
+        /// still scheduled, so the node was reconnected under it.
+        var reconnectedWhilePlaying = false
     }
 
     /// How far ahead of playback we are willing to run. Depth one was too
@@ -97,6 +105,7 @@ final class TrimmedUtterancePlayer {
     private var renderingJob: Job?
     private var scheduled = 0
     private var scheduledSeconds = 0.0
+    private var connectedFormat: AVAudioFormat?
     private var failureReason: String?
     private var returned: [AVSpeechUtterance] = []
 
@@ -218,6 +227,9 @@ final class TrimmedUtterancePlayer {
         outcome.timedOut = result.timedOut
         outcome.idleSeconds = result.idleSeconds
         outcome.characterCount = job.utterance.speechString.count
+        outcome.buffersAfterEnd = result.buffersAfterEnd
+        outcome.mismatchedBuffers = result.mismatchedBuffers
+        outcome.resumedAfterEnd = result.resumedAfterEnd
 
         guard let rendered = result.buffer, result.failure == nil else {
             outcome.failure = result.failure ?? "voice returned no audio"
@@ -241,6 +253,11 @@ final class TrimmedUtterancePlayer {
             return
         }
 
+        if let previous = connectedFormat, scheduled > 0,
+           previous.sampleRate != format.sampleRate || previous.channelCount != format.channelCount {
+            outcome.reconnectedWhilePlaying = true
+        }
+        connectedFormat = format
         if let failure = prepareEngine(format: format) {
             outcome.failure = failure
             onOutcome?(outcome)

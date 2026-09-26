@@ -81,6 +81,30 @@ final class MirrorViewModel: ObservableObject {
     /// how much text is losing pause shortening to the length limit.
     @Published private(set) var longUtterancesSpokenPlain = 0
     @Published private(set) var longestPlainCharacters = 0
+    /// Where speech that rendered fine can still go missing: stopped by the
+    /// PC, cut short by the voice, or dropped on the way to the speaker.
+    /// Each one points at a different fix, which is why they are counted
+    /// apart.
+    @Published private(set) var cutOffByCancel = 0
+    @Published private(set) var cutOffByInterrupt = 0
+    @Published private(set) var buffersAfterEnd = 0
+    @Published private(set) var rendersWithBuffersAfterEnd = 0
+    /// Renders that kept going after an early end marker, and were kept
+    /// whole because the renderer waited for them. macOS only.
+    @Published private(set) var rendersResumedAfterEnd = 0
+    @Published private(set) var mismatchedBuffers = 0
+    @Published private(set) var reconnectsWhilePlaying = 0
+    /// Rendered audio against the length of the text. A render that says
+    /// only part of its text shows up as a thinnest figure far below the
+    /// average. Short utterances are left out: a single letter is mostly
+    /// silence, so its ratio says nothing about truncation.
+    @Published private(set) var averageAudioPerCharacter = 0.0
+    @Published private(set) var thinnestAudioPerCharacter: Double?
+    @Published private(set) var thinnestAudioCharacters = 0
+    @Published private(set) var thinnestAudioSeconds = 0.0
+    private let audioRatioMinimumCharacters = 20
+    private var totalAudioSeconds = 0.0
+    private var totalAudioCharacters = 0
     private var totalRenderSeconds = 0.0
     private var probeToken = 0
 
@@ -121,6 +145,27 @@ final class MirrorViewModel: ObservableObject {
             let average = String(format: "%.0f", averageRenderSeconds * 1000)
             let slowest = String(format: "%.0f", slowestRenderSeconds * 1000)
             lines.append("Render \(average) ms average, \(slowest) ms slowest (\(slowestRenderCharacters) characters), over \(successfulRenders) successful renders.")
+        }
+        if let thinnest = thinnestAudioPerCharacter {
+            let average = String(format: "%.0f", averageAudioPerCharacter * 1000)
+            let least = String(format: "%.0f", thinnest * 1000)
+            let seconds = String(format: "%.1f", thinnestAudioSeconds)
+            lines.append("Audio \(average) ms per character on average, \(least) ms at the least (\(thinnestAudioCharacters) characters, \(seconds) s).")
+        }
+        if cutOffByCancel + cutOffByInterrupt > 0 {
+            lines.append("The PC cut speech off \(cutOffByCancel) times with a cancel and \(cutOffByInterrupt) times with new speech.")
+        }
+        if rendersResumedAfterEnd > 0 {
+            lines.append("Kept \(rendersResumedAfterEnd) renders going past an early end; that audio used to be cut off.")
+        }
+        if buffersAfterEnd > 0 {
+            lines.append("\(rendersWithBuffersAfterEnd) renders ended early; \(buffersAfterEnd) buffers of audio came after the end and were not played.")
+        }
+        if mismatchedBuffers > 0 {
+            lines.append("Left \(mismatchedBuffers) buffers out of renders for having a different format.")
+        }
+        if reconnectsWhilePlaying > 0 {
+            lines.append("Reconnected the speech player \(reconnectsWhilePlaying) times with audio still queued.")
         }
         return lines
     }
@@ -169,6 +214,19 @@ final class MirrorViewModel: ObservableObject {
         }
         renderer.onRenderOutcome = { [weak self] outcome in
             guard let self else { return }
+            // Late buffers arrive after their own render has been reported,
+            // so they ride on the next outcome, whatever became of it.
+            if outcome.buffersAfterEnd > 0 {
+                self.buffersAfterEnd += outcome.buffersAfterEnd
+                self.rendersWithBuffersAfterEnd += 1
+            }
+            self.mismatchedBuffers += outcome.mismatchedBuffers
+            if outcome.resumedAfterEnd > 0 {
+                self.rendersResumedAfterEnd += 1
+            }
+            if outcome.reconnectedWhilePlaying {
+                self.reconnectsWhilePlaying += 1
+            }
             if outcome.timedOut {
                 self.trimTimeouts += 1
                 self.lastTimeoutIdleSeconds = outcome.idleSeconds
@@ -186,6 +244,17 @@ final class MirrorViewModel: ObservableObject {
                 self.slowestRenderSeconds = outcome.renderSeconds
                 self.slowestRenderCharacters = outcome.characterCount
             }
+            if outcome.characterCount >= self.audioRatioMinimumCharacters {
+                self.totalAudioSeconds += outcome.originalSeconds
+                self.totalAudioCharacters += outcome.characterCount
+                self.averageAudioPerCharacter = self.totalAudioSeconds / Double(self.totalAudioCharacters)
+                let ratio = outcome.originalSeconds / Double(outcome.characterCount)
+                if ratio < self.thinnestAudioPerCharacter ?? .infinity {
+                    self.thinnestAudioPerCharacter = ratio
+                    self.thinnestAudioCharacters = outcome.characterCount
+                    self.thinnestAudioSeconds = outcome.originalSeconds
+                }
+            }
         }
         renderer.onLongUtteranceSpokenPlain = { [weak self] characters in
             guard let self else { return }
@@ -197,6 +266,14 @@ final class MirrorViewModel: ObservableObject {
         }
         renderer.onTypingCancelHeld = { [weak self] in
             self?.typingCancelsHeld += 1
+        }
+        renderer.onSpeechCutOff = { [weak self] byCancel in
+            guard let self else { return }
+            if byCancel {
+                self.cutOffByCancel += 1
+            } else {
+                self.cutOffByInterrupt += 1
+            }
         }
         // A connection that died while the app couldn't run shows up as
         // failed only after backoff; reconnect right away instead when the

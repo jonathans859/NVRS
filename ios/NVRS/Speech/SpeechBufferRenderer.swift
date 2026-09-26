@@ -25,6 +25,17 @@ final class SpeechBufferRenderer {
         var timedOut = false
         /// The first attempt came back empty and we asked again.
         var retried = false
+        /// Buffers that arrived after a write had already signalled its end,
+        /// counted since the previous result. Anything here means the end
+        /// marker came early and the audio after it was never played - a
+        /// render that succeeds but says only part of its text.
+        var buffersAfterEnd = 0
+        /// Buffers left out of the joined audio because their format did not
+        /// match the first one's. Also audio the user never hears.
+        var mismatchedBuffers = 0
+        /// More audio arrived after an end marker, inside the grace period,
+        /// and was kept. Each one is a sentence that used to be cut off.
+        var resumedAfterEnd = 0
 
         var failure: String? {
             if timedOut { return "render timed out" }
@@ -76,6 +87,21 @@ final class SpeechBufferRenderer {
     /// 5x) that a fresh instance should not time out on arrival.
     private let abortSettleGap: TimeInterval = 0.12
 
+    /// How long to keep listening after an end marker before calling the
+    /// render complete. On the Mac, speech was cut short with pause
+    /// shortening on and never with it off, while every render reported
+    /// success: the likeliest reading is a voice that sends its zero-length
+    /// buffer before the last of its audio. Waiting a moment keeps that
+    /// audio; `Result.resumedAfterEnd` says whether it happens, and
+    /// `buffersAfterEnd` whether the wait is long enough. The iPhone has
+    /// never shown this, so it keeps finishing on the marker.
+    #if os(macOS)
+    private let endGrace: TimeInterval = 0.05
+    #else
+    private let endGrace: TimeInterval = 0
+    #endif
+    private var endGraceWork: DispatchWorkItem?
+
     private let queue = DispatchQueue(label: "com.jonathan859.nvrs.bufferrender")
     /// Replaced outright whenever a write hangs, so it is main-queue-only:
     /// every read and the one write below happen there.
@@ -97,6 +123,10 @@ final class SpeechBufferRenderer {
     /// the *next* utterance — which is how spelling ended up saying letters
     /// that were never asked for.
     private var writeToken = 0
+    /// The write that last signalled its end. Buffers still arriving for it
+    /// are counted, not collected; see `Result.buffersAfterEnd`.
+    private var endedToken = -1
+    private var buffersAfterEnd = 0
     private var watchdog: DispatchWorkItem?
     private var completion: ((Result) -> Void)?
 
@@ -156,6 +186,10 @@ final class SpeechBufferRenderer {
     // MARK: - Collection (private queue)
 
     private func accept(_ buffer: AVAudioBuffer, from token: Int) {
+        if token == endedToken, let pcm = buffer as? AVAudioPCMBuffer, pcm.frameLength > 0 {
+            buffersAfterEnd += 1
+            return
+        }
         // Anything from a superseded write belongs to an utterance we are no
         // longer rendering; collecting it would corrupt this one.
         guard busy, token == writeToken else { return }
@@ -166,8 +200,26 @@ final class SpeechBufferRenderer {
         // A zero-length buffer is the documented end-of-stream signal.
         guard pcm.frameLength > 0 else {
             result.emptyBuffers += 1
-            finish(timedOut: false)
+            // Nothing collected yet: finish now, so the retry below runs.
+            guard endGrace > 0, !buffers.isEmpty else {
+                endedToken = token
+                finish(timedOut: false)
+                return
+            }
+            endGraceWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.busy, token == self.writeToken else { return }
+                self.endedToken = token
+                self.finish(timedOut: false)
+            }
+            endGraceWork = work
+            queue.asyncAfter(deadline: .now() + endGrace, execute: work)
             return
+        }
+        if let pendingEnd = endGraceWork {
+            pendingEnd.cancel()
+            endGraceWork = nil
+            result.resumedAfterEnd += 1
         }
         if let converted = Self.floatCopy(of: pcm) {
             buffers.append(converted)
@@ -181,6 +233,8 @@ final class SpeechBufferRenderer {
         guard busy else { return }
         watchdog?.cancel()
         watchdog = nil
+        endGraceWork?.cancel()
+        endGraceWork = nil
         finishedAt = CFAbsoluteTimeGetCurrent()
 
         if timedOut {
@@ -226,6 +280,13 @@ final class SpeechBufferRenderer {
         // A timeout means we may be holding half an utterance; speaking half
         // of something is worse than falling back, so hand back nothing.
         result.buffer = timedOut ? nil : SilenceTrimmer.concatenated(buffers)
+        if let first = buffers.first?.format, !timedOut {
+            result.mismatchedBuffers = buffers.filter {
+                $0.format.sampleRate != first.sampleRate || $0.format.channelCount != first.channelCount
+            }.count
+        }
+        result.buffersAfterEnd = buffersAfterEnd
+        buffersAfterEnd = 0
         buffers = []
         let finished = result
         let completion = self.completion
