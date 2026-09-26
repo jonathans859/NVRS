@@ -42,6 +42,9 @@ final class TrimmedUtterancePlayer {
         var buffersAfterEnd = 0
         var mismatchedBuffers = 0
         var resumedAfterEnd = 0
+        var resumeGapTotal: Double = 0
+        var longestResumeGap: Double = 0
+        var previousVoiceFinish: SpeechBufferRenderer.VoiceFinish?
         /// This render's format differed from the last one while audio was
         /// still scheduled, so the node was reconnected under it.
         var reconnectedWhilePlaying = false
@@ -230,6 +233,9 @@ final class TrimmedUtterancePlayer {
         outcome.buffersAfterEnd = result.buffersAfterEnd
         outcome.mismatchedBuffers = result.mismatchedBuffers
         outcome.resumedAfterEnd = result.resumedAfterEnd
+        outcome.resumeGapTotal = result.resumeGapTotal
+        outcome.longestResumeGap = result.longestResumeGap
+        outcome.previousVoiceFinish = result.previousVoiceFinish
 
         guard let rendered = result.buffer, result.failure == nil else {
             outcome.failure = result.failure ?? "voice returned no audio"

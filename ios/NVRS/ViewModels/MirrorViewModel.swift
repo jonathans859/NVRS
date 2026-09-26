@@ -92,6 +92,19 @@ final class MirrorViewModel: ObservableObject {
     /// Renders that kept going after an early end marker, and were kept
     /// whole because the renderer waited for them. macOS only.
     @Published private(set) var rendersResumedAfterEnd = 0
+    /// What the Mac's end grace has to cover: how long the voice went quiet
+    /// after an early end before its audio came back.
+    @Published private(set) var resumeCount = 0
+    @Published private(set) var resumeGapTotal = 0.0
+    @Published private(set) var longestResumeGap = 0.0
+    /// Whether the voice's own "finished" callback could end a render
+    /// instead of the grace: it has to come every time, and never before
+    /// audio that is still on its way.
+    @Published private(set) var voiceFinishMeasured = 0
+    @Published private(set) var voiceFinishSeen = 0
+    @Published private(set) var voiceFinishBeforeAudio = 0
+    @Published private(set) var voiceFinishDelayTotal = 0.0
+    @Published private(set) var longestVoiceFinishDelay = 0.0
     @Published private(set) var mismatchedBuffers = 0
     @Published private(set) var reconnectsWhilePlaying = 0
     /// Rendered audio against the length of the text. A render that says
@@ -158,6 +171,21 @@ final class MirrorViewModel: ObservableObject {
         if rendersResumedAfterEnd > 0 {
             lines.append("Kept \(rendersResumedAfterEnd) renders going past an early end; that audio used to be cut off.")
         }
+        if resumeCount > 0 {
+            let average = String(format: "%.0f", resumeGapTotal / Double(resumeCount) * 1000)
+            let longest = String(format: "%.0f", longestResumeGap * 1000)
+            lines.append("Audio came back \(resumeCount) times after an early end, \(average) ms later on average and \(longest) ms at the longest.")
+        }
+        if voiceFinishMeasured > 0 {
+            let reliable = voiceFinishSeen - voiceFinishBeforeAudio
+            if reliable > 0 {
+                let average = String(format: "%.0f", voiceFinishDelayTotal / Double(reliable) * 1000)
+                let longest = String(format: "%.0f", longestVoiceFinishDelay * 1000)
+                lines.append("The voice said it had finished in \(voiceFinishSeen) of \(voiceFinishMeasured) renders, \(average) ms after its last audio on average and \(longest) ms at the longest. \(voiceFinishBeforeAudio) times, more audio came after it said so.")
+            } else {
+                lines.append("The voice said it had finished in \(voiceFinishSeen) of \(voiceFinishMeasured) renders. \(voiceFinishBeforeAudio) times, more audio came after it said so.")
+            }
+        }
         if buffersAfterEnd > 0 {
             lines.append("\(rendersWithBuffersAfterEnd) renders ended early; \(buffersAfterEnd) buffers of audio came after the end and were not played.")
         }
@@ -223,6 +251,21 @@ final class MirrorViewModel: ObservableObject {
             self.mismatchedBuffers += outcome.mismatchedBuffers
             if outcome.resumedAfterEnd > 0 {
                 self.rendersResumedAfterEnd += 1
+                self.resumeCount += outcome.resumedAfterEnd
+                self.resumeGapTotal += outcome.resumeGapTotal
+                self.longestResumeGap = max(self.longestResumeGap, outcome.longestResumeGap)
+            }
+            if let finish = outcome.previousVoiceFinish {
+                self.voiceFinishMeasured += 1
+                if let delay = finish.afterLastAudio {
+                    self.voiceFinishSeen += 1
+                    if finish.audioAfterFinish {
+                        self.voiceFinishBeforeAudio += 1
+                    } else {
+                        self.voiceFinishDelayTotal += delay
+                        self.longestVoiceFinishDelay = max(self.longestVoiceFinishDelay, delay)
+                    }
+                }
             }
             if outcome.reconnectedWhilePlaying {
                 self.reconnectsWhilePlaying += 1

@@ -7,7 +7,19 @@ import Foundation
 /// Field-measured on Apple's 16 kHz voices: about 20× real time once warm,
 /// so a one-second utterance costs ~50 ms before playback can start. The
 /// first render after launch costs roughly three times that (engine warm-up).
-final class SpeechBufferRenderer {
+final class SpeechBufferRenderer: NSObject, AVSpeechSynthesizerDelegate {
+    /// How the voice's own "finished" callback lined up with its audio on
+    /// one write. Measured to see whether that callback can replace
+    /// `endGrace`, which costs up to 50 ms on every Mac render: it can if it
+    /// always comes after the last audio, and sooner than the grace does.
+    struct VoiceFinish {
+        /// Nil when the voice never said it had finished.
+        var afterLastAudio: Double?
+        /// Audio kept coming after the voice said it had finished, so
+        /// finishing on the callback would have cut it off.
+        var audioAfterFinish = false
+    }
+
     struct Result {
         /// All buffers concatenated into one, in standard float format.
         /// Nil means the voice gave us nothing usable — the caller must fall
@@ -36,6 +48,13 @@ final class SpeechBufferRenderer {
         /// More audio arrived after an end marker, inside the grace period,
         /// and was kept. Each one is a sentence that used to be cut off.
         var resumedAfterEnd = 0
+        /// How long the voice went quiet after an early end marker before
+        /// its audio came back. What `endGrace` has to cover, and no more.
+        var resumeGapTotal: Double = 0
+        var longestResumeGap: Double = 0
+        /// The *previous* render's, since the voice may say it finished
+        /// only after that render was handed on.
+        var previousVoiceFinish: VoiceFinish?
 
         var failure: String? {
             if timedOut { return "render timed out" }
@@ -101,6 +120,26 @@ final class SpeechBufferRenderer {
     private let endGrace: TimeInterval = 0
     #endif
     private var endGraceWork: DispatchWorkItem?
+    private var endMarkerAt: CFAbsoluteTime?
+
+    private struct WriteTiming {
+        let token: Int
+        let utterance: AVSpeechUtterance
+        var lastAudioAt: CFAbsoluteTime?
+        var voiceFinishedAt: CFAbsoluteTime?
+        var audioAfterVoiceFinished = false
+
+        var summary: VoiceFinish? {
+            guard let lastAudioAt else { return nil }
+            return VoiceFinish(
+                afterLastAudio: voiceFinishedAt.map { $0 - lastAudioAt },
+                audioAfterFinish: audioAfterVoiceFinished
+            )
+        }
+    }
+    /// The latest write, kept until the next render starts so a late
+    /// "finished" is still caught. Private queue only.
+    private var timing: WriteTiming?
 
     private let queue = DispatchQueue(label: "com.jonathan859.nvrs.bufferrender")
     /// Replaced outright whenever a write hangs, so it is main-queue-only:
@@ -130,6 +169,11 @@ final class SpeechBufferRenderer {
     private var watchdog: DispatchWorkItem?
     private var completion: ((Result) -> Void)?
 
+    override init() {
+        super.init()
+        synthesizer.delegate = self
+    }
+
     /// Completion is always delivered on the main queue, exactly once.
     func render(_ utterance: AVSpeechUtterance, completion: @escaping (Result) -> Void) {
         queue.async { [weak self] in
@@ -146,6 +190,7 @@ final class SpeechBufferRenderer {
             self.completion = completion
             self.attempt = 0
             self.pendingUtterance = utterance
+            self.result.previousVoiceFinish = self.timing?.summary
             self.startedAt = CFAbsoluteTimeGetCurrent()
             if self.finishedAt > 0 {
                 self.result.idleSeconds = self.startedAt - self.finishedAt
@@ -158,6 +203,7 @@ final class SpeechBufferRenderer {
         guard let utterance = pendingUtterance else { return }
         writeToken += 1
         let token = writeToken
+        timing = WriteTiming(token: token, utterance: utterance)
         let sinceLastWrite = CFAbsoluteTimeGetCurrent() - finishedAt
         let gap = abortedWrite ? abortSettleGap : minimumWriteGap
         abortedWrite = false
@@ -188,6 +234,7 @@ final class SpeechBufferRenderer {
     private func accept(_ buffer: AVAudioBuffer, from token: Int) {
         if token == endedToken, let pcm = buffer as? AVAudioPCMBuffer, pcm.frameLength > 0 {
             buffersAfterEnd += 1
+            noteAudio(from: token)
             return
         }
         // Anything from a superseded write belongs to an utterance we are no
@@ -213,6 +260,7 @@ final class SpeechBufferRenderer {
                 self.finish(timedOut: false)
             }
             endGraceWork = work
+            endMarkerAt = CFAbsoluteTimeGetCurrent()
             queue.asyncAfter(deadline: .now() + endGrace, execute: work)
             return
         }
@@ -220,7 +268,14 @@ final class SpeechBufferRenderer {
             pendingEnd.cancel()
             endGraceWork = nil
             result.resumedAfterEnd += 1
+            if let marker = endMarkerAt {
+                let gap = CFAbsoluteTimeGetCurrent() - marker
+                result.resumeGapTotal += gap
+                result.longestResumeGap = max(result.longestResumeGap, gap)
+            }
         }
+        endMarkerAt = nil
+        noteAudio(from: token)
         if let converted = Self.floatCopy(of: pcm) {
             buffers.append(converted)
             result.bufferCount += 1
@@ -235,6 +290,7 @@ final class SpeechBufferRenderer {
         watchdog = nil
         endGraceWork?.cancel()
         endGraceWork = nil
+        endMarkerAt = nil
         finishedAt = CFAbsoluteTimeGetCurrent()
 
         if timedOut {
@@ -260,6 +316,7 @@ final class SpeechBufferRenderer {
                 guard let self else { return }
                 self.synthesizer.stopSpeaking(at: .immediate)
                 self.synthesizer = AVSpeechSynthesizer()
+                self.synthesizer.delegate = self
             }
         }
 
@@ -293,6 +350,24 @@ final class SpeechBufferRenderer {
         self.completion = nil
         DispatchQueue.main.async {
             completion?(finished)
+        }
+    }
+
+    // MARK: - Voice finish timing (diagnostics)
+
+    private func noteAudio(from token: Int) {
+        guard timing?.token == token else { return }
+        timing?.lastAudioAt = CFAbsoluteTimeGetCurrent()
+        if timing?.voiceFinishedAt != nil {
+            timing?.audioAfterVoiceFinished = true
+        }
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        let at = CFAbsoluteTimeGetCurrent()
+        queue.async { [weak self] in
+            guard let self, self.timing?.utterance === utterance, self.timing?.voiceFinishedAt == nil else { return }
+            self.timing?.voiceFinishedAt = at
         }
     }
 
