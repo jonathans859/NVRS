@@ -10,7 +10,7 @@ import Foundation
 final class SpeechBufferRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// How the voice's own "finished" callback lined up with its audio on
     /// one write. Measured to see whether that callback can replace
-    /// `endGrace`, which costs up to 50 ms on every Mac render: it can if it
+    /// `endGrace`, which costs up to 50 ms on every render: it can if it
     /// always comes after the last audio, and sooner than the grace does.
     struct VoiceFinish {
         /// Nil when the voice never said it had finished.
@@ -112,13 +112,9 @@ final class SpeechBufferRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// success: the likeliest reading is a voice that sends its zero-length
     /// buffer before the last of its audio. Waiting a moment keeps that
     /// audio; `Result.resumedAfterEnd` says whether it happens, and
-    /// `buffersAfterEnd` whether the wait is long enough. The iPhone has
-    /// never shown this, so it keeps finishing on the marker.
-    #if os(macOS)
+    /// `buffersAfterEnd` whether the wait is long enough. The iPhone was
+    /// spared at first, then showed the same cut-offs, so both wait now.
     private let endGrace: TimeInterval = 0.05
-    #else
-    private let endGrace: TimeInterval = 0
-    #endif
     private var endGraceWork: DispatchWorkItem?
     private var endMarkerAt: CFAbsoluteTime?
 

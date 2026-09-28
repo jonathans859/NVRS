@@ -90,9 +90,9 @@ final class MirrorViewModel: ObservableObject {
     @Published private(set) var buffersAfterEnd = 0
     @Published private(set) var rendersWithBuffersAfterEnd = 0
     /// Renders that kept going after an early end marker, and were kept
-    /// whole because the renderer waited for them. macOS only.
+    /// whole because the renderer waited for them.
     @Published private(set) var rendersResumedAfterEnd = 0
-    /// What the Mac's end grace has to cover: how long the voice went quiet
+    /// What the end grace has to cover: how long the voice went quiet
     /// after an early end before its audio came back.
     @Published private(set) var resumeCount = 0
     @Published private(set) var resumeGapTotal = 0.0
