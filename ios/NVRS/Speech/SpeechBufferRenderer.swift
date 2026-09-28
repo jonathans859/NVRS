@@ -9,9 +9,8 @@ import Foundation
 /// first render after launch costs roughly three times that (engine warm-up).
 final class SpeechBufferRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// How the voice's own "finished" callback lined up with its audio on
-    /// one write. Measured to see whether that callback can replace
-    /// `endGrace`, which costs up to 50 ms on every render: it can if it
-    /// always comes after the last audio, and sooner than the grace does.
+    /// one write. That callback is what ends a render now, so this is the
+    /// check that it still comes after the last audio, and soon.
     struct VoiceFinish {
         /// Nil when the voice never said it had finished.
         var afterLastAudio: Double?
@@ -52,6 +51,9 @@ final class SpeechBufferRenderer: NSObject, AVSpeechSynthesizerDelegate {
         /// its audio came back. What `endGrace` has to cover, and no more.
         var resumeGapTotal: Double = 0
         var longestResumeGap: Double = 0
+        /// The voice never said it had finished within `endGrace` of its end
+        /// marker, so the backup wait ended the render instead.
+        var endedByBackup = false
         /// The *previous* render's, since the voice may say it finished
         /// only after that render was handed on.
         var previousVoiceFinish: VoiceFinish?
@@ -114,6 +116,13 @@ final class SpeechBufferRenderer: NSObject, AVSpeechSynthesizerDelegate {
     /// audio; `Result.resumedAfterEnd` says whether it happens, and
     /// `buffersAfterEnd` whether the wait is long enough. The iPhone was
     /// spared at first, then showed the same cut-offs, so both wait now.
+    ///
+    /// Only a backup: a render normally ends as soon as the end marker and
+    /// the voice's own "finished" callback are both in. Measured over 2053
+    /// iPhone renders, that callback came every time, never before audio
+    /// still on its way, and 6 ms after the last audio on average (19 ms at
+    /// most) - where waiting out the grace cost the full 50 ms every time.
+    /// `Result.endedByBackup` counts the renders it still has to end.
     private let endGrace: TimeInterval = 0.05
     private var endGraceWork: DispatchWorkItem?
     private var endMarkerAt: CFAbsoluteTime?
@@ -244,7 +253,8 @@ final class SpeechBufferRenderer: NSObject, AVSpeechSynthesizerDelegate {
         guard pcm.frameLength > 0 else {
             result.emptyBuffers += 1
             // Nothing collected yet: finish now, so the retry below runs.
-            guard endGrace > 0, !buffers.isEmpty else {
+            // The voice already said it finished: nothing more is coming.
+            if buffers.isEmpty || (timing?.token == token && timing?.voiceFinishedAt != nil) {
                 endedToken = token
                 finish(timedOut: false)
                 return
@@ -252,6 +262,7 @@ final class SpeechBufferRenderer: NSObject, AVSpeechSynthesizerDelegate {
             endGraceWork?.cancel()
             let work = DispatchWorkItem { [weak self] in
                 guard let self, self.busy, token == self.writeToken else { return }
+                self.result.endedByBackup = true
                 self.endedToken = token
                 self.finish(timedOut: false)
             }
@@ -349,7 +360,7 @@ final class SpeechBufferRenderer: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
-    // MARK: - Voice finish timing (diagnostics)
+    // MARK: - Voice finish
 
     private func noteAudio(from token: Int) {
         guard timing?.token == token else { return }
@@ -362,8 +373,18 @@ final class SpeechBufferRenderer: NSObject, AVSpeechSynthesizerDelegate {
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         let at = CFAbsoluteTimeGetCurrent()
         queue.async { [weak self] in
-            guard let self, self.timing?.utterance === utterance, self.timing?.voiceFinishedAt == nil else { return }
+            // A write with no audio yet is ignored: after an empty render is
+            // retried, the first write's late "finished" would otherwise be
+            // taken for the retry's, which carries the same utterance.
+            guard let self, let timing = self.timing, timing.utterance === utterance,
+                  timing.lastAudioAt != nil, timing.voiceFinishedAt == nil else { return }
             self.timing?.voiceFinishedAt = at
+            // The end marker is in and only the backup wait is holding the
+            // render open.
+            if self.endGraceWork != nil, self.busy, timing.token == self.writeToken {
+                self.endedToken = timing.token
+                self.finish(timedOut: false)
+            }
         }
     }
 

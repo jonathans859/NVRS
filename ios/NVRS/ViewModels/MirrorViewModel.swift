@@ -97,6 +97,9 @@ final class MirrorViewModel: ObservableObject {
     @Published private(set) var resumeCount = 0
     @Published private(set) var resumeGapTotal = 0.0
     @Published private(set) var longestResumeGap = 0.0
+    /// Renders the voice never said it had finished, ended by the backup
+    /// wait instead. Each one cost the full 50 ms the finish signal saves.
+    @Published private(set) var rendersEndedByBackup = 0
     /// Whether the voice's own "finished" callback could end a render
     /// instead of the grace: it has to come every time, and never before
     /// audio that is still on its way.
@@ -176,6 +179,9 @@ final class MirrorViewModel: ObservableObject {
             let longest = String(format: "%.0f", longestResumeGap * 1000)
             lines.append("Audio came back \(resumeCount) times after an early end, \(average) ms later on average and \(longest) ms at the longest.")
         }
+        if rendersEndedByBackup > 0 {
+            lines.append("The voice never said it had finished in \(rendersEndedByBackup) renders; the backup wait ended them.")
+        }
         if voiceFinishMeasured > 0 {
             let reliable = voiceFinishSeen - voiceFinishBeforeAudio
             if reliable > 0 {
@@ -254,6 +260,9 @@ final class MirrorViewModel: ObservableObject {
                 self.resumeCount += outcome.resumedAfterEnd
                 self.resumeGapTotal += outcome.resumeGapTotal
                 self.longestResumeGap = max(self.longestResumeGap, outcome.longestResumeGap)
+            }
+            if outcome.endedByBackup {
+                self.rendersEndedByBackup += 1
             }
             if let finish = outcome.previousVoiceFinish {
                 self.voiceFinishMeasured += 1
