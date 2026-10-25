@@ -41,6 +41,7 @@ struct SettingsView: View {
                     PCVoiceMappingView()
                 }
                 rateSlider
+                rateField
                 pitchSlider
                 volumeSlider
                 Button("Reset rate, pitch and volume") {
@@ -90,11 +91,53 @@ struct SettingsView: View {
         .navigationTitle("Settings")
     }
 
+    /// In steps of five percent, so the arrow keys and VoiceOver's
+    /// adjustments land on round numbers. The adjustable action is explicit
+    /// because the slider's own may not honour the step.
     private var rateSlider: some View {
-        Slider(value: $settings.baseRate, in: 0.1...1.0) {
+        Slider(value: $settings.baseRate, in: 0.1...1.0, step: 0.05) {
             Text("Speech rate")
         }
-        .accessibilityValue("\(Int(settings.baseRate * 100)) percent")
+        .accessibilityValue("\(ratePercent) percent")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment:
+                stepRate(up: true)
+            case .decrement:
+                stepRate(up: false)
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    /// The same rate, typed instead of stepped.
+    private var rateField: some View {
+        TextField("Rate in percent", value: ratePercentBinding, format: .number.grouping(.never))
+            .numberFieldTraits()
+            .accessibilityHint("Speech rate from 10 to 100 percent. The default is 50.")
+    }
+
+    private var ratePercent: Int {
+        Int((settings.baseRate * 100).rounded())
+    }
+
+    private var ratePercentBinding: Binding<Int> {
+        Binding(
+            get: { ratePercent },
+            set: { setRatePercent($0) }
+        )
+    }
+
+    private func setRatePercent(_ percent: Int) {
+        settings.baseRate = Double(min(max(percent, 10), 100)) / 100
+    }
+
+    /// Snaps to the five-percent grid on the way, so a value typed or left
+    /// over from the old free slider (say 53) goes to 55 or 50, not 58 or 48.
+    private func stepRate(up: Bool) {
+        let current = ratePercent
+        setRatePercent(up ? (current / 5 + 1) * 5 : ((current + 4) / 5 - 1) * 5)
     }
 
     private var pitchSlider: some View {
