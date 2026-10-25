@@ -49,6 +49,8 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
         LSApplicationCategoryType: public.app-category.utilities
+        # Menu-bar app: no Dock icon, and no window until the menu opens one.
+        LSUIElement: true
     entitlements:
       path: NVRSMac.entitlements
       properties:
