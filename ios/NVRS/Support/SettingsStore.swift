@@ -12,6 +12,14 @@ struct PCVoice: Identifiable, Codable, Equatable {
     var id: String { key }
 }
 
+/// A PC address the user saved to switch back to later.
+struct SavedConnection: Identifiable, Codable, Equatable {
+    var host: String
+    var port: Int
+
+    var id: String { "\(host):\(port)" }
+}
+
 /// All user settings. UserDefaults-backed except the shared secret, which
 /// lives in the keychain.
 @MainActor
@@ -29,7 +37,14 @@ final class SettingsStore: ObservableObject {
     }
 
     @Published var secret: String {
-        didSet { KeychainHelper.saveSecret(secret) }
+        didSet {
+            KeychainHelper.saveSecret(secret)
+            // Editing the secret while a saved connection is selected
+            // updates that connection's copy too.
+            if let current = savedConnections.first(where: isCurrent) {
+                KeychainHelper.saveSecret(secret, forConnection: current.id)
+            }
+        }
     }
 
     @Published var autoConnect: Bool {
@@ -104,6 +119,15 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Addresses saved under Connection; picking one fills host and port.
+    @Published var savedConnections: [SavedConnection] {
+        didSet {
+            if let data = try? JSONEncoder().encode(savedConnections) {
+                defaults.set(data, forKey: "savedConnections")
+            }
+        }
+    }
+
     private init() {
         host = defaults.string(forKey: "host") ?? ""
         let storedPort = defaults.integer(forKey: "port")
@@ -130,6 +154,53 @@ final class SettingsStore: ObservableObject {
         } else {
             pcVoices = []
         }
+        if let data = defaults.data(forKey: "savedConnections"),
+           let stored = try? JSONDecoder().decode([SavedConnection].self, from: data) {
+            savedConnections = stored
+        } else {
+            savedConnections = []
+        }
+    }
+
+    /// The host and port currently in the fields, trimmed, or nil when they
+    /// are empty, out of range or already saved.
+    var connectionToSave: SavedConnection? {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, port > 0, port <= 65535 else { return nil }
+        let candidate = SavedConnection(host: trimmed, port: port)
+        return savedConnections.contains(candidate) ? nil : candidate
+    }
+
+    func isCurrent(_ connection: SavedConnection) -> Bool {
+        connection.host == host.trimmingCharacters(in: .whitespacesAndNewlines)
+            && connection.port == port
+    }
+
+    /// Saves host, port and secret as they are in the fields now. The
+    /// secret goes to the keychain under the connection's `ip:port`.
+    func saveCurrentConnection() -> SavedConnection? {
+        guard let connection = connectionToSave else { return nil }
+        KeychainHelper.saveSecret(secret, forConnection: connection.id)
+        savedConnections.append(connection)
+        return connection
+    }
+
+    func select(_ connection: SavedConnection) {
+        host = connection.host
+        port = connection.port
+        secret = KeychainHelper.loadSecret(forConnection: connection.id)
+    }
+
+    func deleteSavedConnections(atOffsets offsets: IndexSet) {
+        for index in offsets {
+            KeychainHelper.deleteSecret(forConnection: savedConnections[index].id)
+        }
+        savedConnections.remove(atOffsets: offsets)
+    }
+
+    func deleteSavedConnection(_ connection: SavedConnection) {
+        guard let index = savedConnections.firstIndex(of: connection) else { return }
+        deleteSavedConnections(atOffsets: IndexSet(integer: index))
     }
 
     /// Back to the shipped defaults for the three sliders — the way out of a

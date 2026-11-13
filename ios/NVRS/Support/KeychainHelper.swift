@@ -1,13 +1,18 @@
 import Foundation
 import Security
 
-/// Minimal keychain wrapper for the shared secret. `AfterFirstUnlock` so
-/// background reconnects can still read it.
+/// Minimal keychain wrapper for the shared secret: the active one, plus one
+/// per saved connection. `AfterFirstUnlock` so background reconnects can
+/// still read it.
 enum KeychainHelper {
     private static let service = "com.jonathan859.nvrs"
-    private static let account = "shared-secret"
+    private static let activeAccount = "shared-secret"
 
-    private static var baseQuery: [String: Any] {
+    private static func savedAccount(_ connectionID: String) -> String {
+        "saved-secret:\(connectionID)"
+    }
+
+    private static func baseQuery(account: String) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -22,8 +27,28 @@ enum KeychainHelper {
     }
 
     static func saveSecret(_ value: String) {
+        save(value, account: activeAccount)
+    }
+
+    static func loadSecret() -> String {
+        load(account: activeAccount)
+    }
+
+    static func saveSecret(_ value: String, forConnection id: String) {
+        save(value, account: savedAccount(id))
+    }
+
+    static func loadSecret(forConnection id: String) -> String {
+        load(account: savedAccount(id))
+    }
+
+    static func deleteSecret(forConnection id: String) {
+        SecItemDelete(baseQuery(account: savedAccount(id)) as CFDictionary)
+    }
+
+    private static func save(_ value: String, account: String) {
         let data = Data(value.utf8)
-        let query = baseQuery
+        let query = baseQuery(account: account)
         SecItemDelete(query as CFDictionary)
         guard !value.isEmpty else { return }
         var attributes = query
@@ -32,8 +57,8 @@ enum KeychainHelper {
         SecItemAdd(attributes as CFDictionary, nil)
     }
 
-    static func loadSecret() -> String {
-        var query = baseQuery
+    private static func load(account: String) -> String {
+        var query = baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: AnyObject?

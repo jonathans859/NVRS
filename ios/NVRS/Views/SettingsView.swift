@@ -18,6 +18,16 @@ struct SettingsView: View {
                     .accessibilityHint("Must match the port in NVDA's NVRS settings. Default 6877.")
                 SecureField("Shared secret", text: $settings.secret)
                     .accessibilityHint("Must match the shared secret set in NVDA's NVRS settings panel.")
+                Button("Add to saved connections") {
+                    guard let connection = settings.saveCurrentConnection() else { return }
+                    Announce.post(String(localized: "Saved \(connection.id)"))
+                }
+                .disabled(settings.connectionToSave == nil)
+                .accessibilityHint("Saves the address, port and shared secret to the list below.")
+                ForEach(settings.savedConnections) { connection in
+                    savedConnectionRow(connection)
+                }
+                .onDelete { settings.deleteSavedConnections(atOffsets: $0) }
                 Toggle("Connect automatically", isOn: $settings.autoConnect)
                 #if os(iOS)
                 Toggle("Stay awake in background", isOn: $settings.keepAliveInBackground)
@@ -89,6 +99,41 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+    }
+
+    /// One saved address. Activating it fills the host and port fields; the
+    /// one matching them carries the selected trait. Delete comes from
+    /// `.onDelete` on iOS (swipe, and VoiceOver's own Delete action); macOS
+    /// has no swipe in a Form, so it gets a named action and a context menu.
+    private func savedConnectionRow(_ connection: SavedConnection) -> some View {
+        let isCurrent = settings.isCurrent(connection)
+        return Button {
+            settings.select(connection)
+        } label: {
+            HStack {
+                Text(connection.id)
+                    .foregroundStyle(.primary)
+                Spacer()
+                if isCurrent {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.tint)
+                        .accessibilityHidden(true)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .accessibilityAddTraits(isCurrent ? .isSelected : [])
+        .accessibilityHint("Uses this address, port and shared secret for the connection.")
+        #if os(macOS)
+        .accessibilityAction(named: "Delete") { delete(connection) }
+        .contextMenu {
+            Button("Delete", role: .destructive) { delete(connection) }
+        }
+        #endif
+    }
+
+    private func delete(_ connection: SavedConnection) {
+        settings.deleteSavedConnection(connection)
     }
 
     /// In steps of five percent, so the arrow keys and VoiceOver's
