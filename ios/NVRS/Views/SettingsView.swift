@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var viewModel: MirrorViewModel
+    @State private var newConnectionName = ""
 
     var body: some View {
         Form {
@@ -18,9 +19,12 @@ struct SettingsView: View {
                     .accessibilityHint("Must match the port in NVDA's NVRS settings. Default 6877.")
                 SecureField("Shared secret", text: $settings.secret)
                     .accessibilityHint("Must match the shared secret set in NVDA's NVRS settings panel.")
+                TextField("Name (optional)", text: $newConnectionName)
+                    .accessibilityHint("A friendly name for the saved connection, such as PC. Leave empty to list it by address.")
                 Button("Add to saved connections") {
-                    guard let connection = settings.saveCurrentConnection() else { return }
-                    Announce.post(String(localized: "Saved \(connection.id)"))
+                    guard let connection = settings.saveCurrentConnection(name: newConnectionName) else { return }
+                    newConnectionName = ""
+                    Announce.post(String(localized: "Saved \(connection.displayName)"))
                 }
                 .disabled(settings.connectionToSave == nil)
                 .accessibilityHint("Saves the address, port and shared secret to the list below.")
@@ -111,8 +115,14 @@ struct SettingsView: View {
             settings.select(connection)
         } label: {
             HStack {
-                Text(connection.id)
-                    .foregroundStyle(.primary)
+                VStack(alignment: .leading) {
+                    Text(connection.displayName)
+                    if connection.name != nil {
+                        Text(connection.id)
+                            .font(.footnote)
+                    }
+                }
+                .foregroundStyle(.primary)
                 Spacer()
                 if isCurrent {
                     Image(systemName: "checkmark")

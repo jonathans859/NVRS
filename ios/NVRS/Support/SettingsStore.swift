@@ -16,8 +16,15 @@ struct PCVoice: Identifiable, Codable, Equatable {
 struct SavedConnection: Identifiable, Codable, Equatable {
     var host: String
     var port: Int
+    /// Optional friendly name ("PC"). Optional so lists saved before names
+    /// existed still decode.
+    var name: String?
 
+    /// Also the keychain key for the connection's secret, so it stays
+    /// address-based whatever the name.
     var id: String { "\(host):\(port)" }
+
+    var displayName: String { name ?? id }
 }
 
 /// All user settings. UserDefaults-backed except the shared secret, which
@@ -168,7 +175,7 @@ final class SettingsStore: ObservableObject {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, port > 0, port <= 65535 else { return nil }
         let candidate = SavedConnection(host: trimmed, port: port)
-        return savedConnections.contains(candidate) ? nil : candidate
+        return savedConnections.contains { $0.id == candidate.id } ? nil : candidate
     }
 
     func isCurrent(_ connection: SavedConnection) -> Bool {
@@ -178,8 +185,10 @@ final class SettingsStore: ObservableObject {
 
     /// Saves host, port and secret as they are in the fields now. The
     /// secret goes to the keychain under the connection's `ip:port`.
-    func saveCurrentConnection() -> SavedConnection? {
-        guard let connection = connectionToSave else { return nil }
+    func saveCurrentConnection(name: String) -> SavedConnection? {
+        guard var connection = connectionToSave else { return nil }
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        connection.name = trimmedName.isEmpty ? nil : trimmedName
         KeychainHelper.saveSecret(secret, forConnection: connection.id)
         savedConnections.append(connection)
         return connection
