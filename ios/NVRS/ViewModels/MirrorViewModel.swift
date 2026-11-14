@@ -499,6 +499,18 @@ final class MirrorViewModel: ObservableObject {
         transport = nil
     }
 
+    /// Drops the current connection and builds a fresh one, even while it
+    /// still reads as connected -- the way out of a link that went quiet
+    /// without anything reporting it.
+    func reconnect() {
+        guard isConnectEnabled else { return }
+        // Set before the old transport goes, so the new one's "connecting"
+        // isn't announced as a lost connection.
+        connectionState = .connecting
+        Announce.post(String(localized: "Reconnecting"))
+        connect()
+    }
+
     private func reconnectAfterForeground() {
         guard isConnectEnabled, connectionState != .connected else { return }
         connect()

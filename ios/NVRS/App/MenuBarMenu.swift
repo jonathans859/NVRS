@@ -22,6 +22,12 @@ struct MenuBarMenu: View {
             }
         }
         .keyboardShortcut("c", modifiers: [])
+        if viewModel.isConnectEnabled {
+            Button("Reconnect") {
+                viewModel.reconnect()
+            }
+            .keyboardShortcut("r", modifiers: [])
+        }
         Toggle("Speak on this Mac", isOn: speakBinding)
             .keyboardShortcut("s", modifiers: [])
         if viewModel.pcMuteAllowed {

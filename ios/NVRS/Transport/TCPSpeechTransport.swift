@@ -3,7 +3,8 @@ import Foundation
 import Network
 
 /// Direct TCP connection to the NVDA add-on's listener on the tailnet,
-/// speaking NDJSON. Auto-reconnects with exponential backoff until `stop()`.
+/// speaking NDJSON. Auto-reconnects with exponential backoff until `stop()`,
+/// and rebuilds a connection that has been waiting for a route too long.
 final class TCPSpeechTransport: SpeechTransport {
     var onEvent: ((TransportEvent) -> Void)?
 
@@ -27,6 +28,17 @@ final class TCPSpeechTransport: SpeechTransport {
     /// and falling back to the old handshake. The add-on sends its challenge
     /// before reading anything, so on a healthy link this never elapses.
     private static let challengeGraceSeconds = 2.0
+
+    /// How long a connection may sit in `.waiting` before it is replaced by a
+    /// fresh one. Network.framework only retries a waiting connection when it
+    /// sees the path change, and over Tailscale the tunnel interface stays up
+    /// while the mobile signal drops and returns underneath it -- so a
+    /// connection started in a dead spot can wait long after the signal is back.
+    private static let waitingRebuildSeconds = 10.0
+
+    /// Ceiling for the gap between automatic retries. Kept short: on a moving
+    /// phone the network comes back at any moment, and a retry is cheap.
+    private static let maxReconnectDelay = 15.0
 
     init(host: String, port: UInt16, secret: String) {
         self.host = host
@@ -75,6 +87,13 @@ final class TCPSpeechTransport: SpeechTransport {
         tcpOptions.connectionTimeout = 10
         tcpOptions.enableKeepalive = true
         tcpOptions.keepaliveIdle = 15
+        // Left at the system defaults, a link that silently stops carrying
+        // packets (a tunnel, a dead spot) takes around ten minutes to be
+        // declared dead. This makes it about half a minute.
+        tcpOptions.keepaliveInterval = 5
+        tcpOptions.keepaliveCount = 3
+        // Same, for when our own data is queued and never acknowledged.
+        tcpOptions.connectionDropTime = 10
         let params = NWParameters(tls: nil, tcp: tcpOptions)
         let conn = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: params)
         connection = conn
@@ -101,9 +120,18 @@ final class TCPSpeechTransport: SpeechTransport {
                 self.sendLegacyAuth(on: conn)
             }
         case .waiting(let error):
-            // No route yet (e.g. Tailscale down); Network.framework retries
-            // by itself when connectivity changes, so just surface it.
+            // No route yet (e.g. Tailscale down). Network.framework retries
+            // by itself when it sees connectivity change; if it hasn't got
+            // anywhere after a while, start over on a fresh connection.
             emit(.stateChanged(.waiting(error.localizedDescription)))
+            queue.asyncAfter(deadline: .now() + Self.waitingRebuildSeconds) { [weak self] in
+                guard let self, !self.stopped, conn === self.connection,
+                      case .waiting = conn.state else { return }
+                // Replace first, so the cancelled connection's trailing
+                // state updates no longer match and are dropped.
+                self.openConnection()
+                conn.cancel()
+            }
         case .failed(let error):
             connection = nil
             emit(.stateChanged(.disconnected(error.localizedDescription)))
@@ -122,7 +150,7 @@ final class TCPSpeechTransport: SpeechTransport {
     private func scheduleReconnect() {
         guard !stopped else { return }
         attempt += 1
-        let delay = min(60.0, pow(2.0, Double(min(attempt, 6)))) + Double.random(in: 0...1)
+        let delay = min(Self.maxReconnectDelay, pow(2.0, Double(min(attempt, 6)))) + Double.random(in: 0...1)
         queue.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, !self.stopped, self.connection == nil else { return }
             self.openConnection()

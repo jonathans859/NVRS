@@ -40,6 +40,12 @@ struct ContentView: View {
                             ? "Drops the link to the NVRS add-on on your PC."
                             : "Connects to the NVRS add-on on your PC over Tailscale."
                     )
+                    if viewModel.isConnectEnabled {
+                        Button("Reconnect") {
+                            viewModel.reconnect()
+                        }
+                        .accessibilityHint("Starts a fresh connection to your PC. Use it when speech has stopped arriving, even if the status says connected.")
+                    }
                     #if os(iOS)
                     Toggle("Speak on this iPhone", isOn: speakBinding)
                         .accessibilityHint("Turn off to silence mirrored speech without disconnecting. Two-finger double tap anywhere toggles this too.")
